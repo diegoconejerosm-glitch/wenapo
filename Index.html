@@ -1,0 +1,3465 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PneumoVision Pro — Analizador Biomecánico I:E, Simetría Hemitorácica y Patrón Toracoabdominal</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- MediaPipe Pose y Camera Utils (CDN oficial) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <!-- jsPDF para generación de informe kinésico en PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <!-- Tipografías clínicas Inter + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            obsidian: '#0B0F19',
+            panel: '#111827',
+            borderSubtle: '#1E293B',
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    body {
+      background-color: #0B0F19;
+      color: #F3F4F6;
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+    }
+
+    .clinical-panel {
+      background-color: #111827;
+      border: 1px solid #1E293B;
+      box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.78);
+    }
+
+    @keyframes arrowFloatUp {
+      0%, 100% { transform: translateY(2px); }
+      50% { transform: translateY(-4px); }
+    }
+    @keyframes arrowFloatDown {
+      0%, 100% { transform: translateY(-2px); }
+      50% { transform: translateY(4px); }
+    }
+    @keyframes pulseDot {
+      0%, 100% { transform: scale(0.92); opacity: 0.95; }
+      50% { transform: scale(1.18); opacity: 0.45; }
+    }
+
+    .anim-up { animation: arrowFloatUp 1.05s infinite ease-in-out; }
+    .anim-down { animation: arrowFloatDown 1.25s infinite ease-in-out; }
+    .pulse-live { animation: pulseDot 1.8s infinite ease-in-out; }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0B0F19; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
+
+  <!-- =====================================================================
+       CABECERA CLÍNICA: IDENTIDAD, STEPPER DE FASES, INTERRUPTOR ABDOMEN Y AGC
+       ===================================================================== -->
+  <header class="sticky top-0 z-40 border-b border-[#1E293B] bg-[#0B0F19]/95 backdrop-blur-md">
+    <div class="max-w-[1460px] mx-auto px-3 sm:px-5 py-2 flex flex-wrap items-center justify-between gap-2">
+      
+      <!-- Identidad del Monitor -->
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-500/20 to-emerald-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 shrink-0">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 13h3l2.5-6 3.5 11 3-8 2 3h4" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-1.5">
+            <h1 class="text-sm sm:text-base font-bold tracking-tight text-white">PneumoVision Pro</h1>
+            <span class="text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+              I:E · HD/HI · ABD
+            </span>
+          </div>
+          <p class="text-[10px] text-slate-400 hidden xl:block">Analizador Biomecánico I:E, Simetría Hemitorácica y Patrón Toracoabdominal</p>
+        </div>
+      </div>
+
+      <!-- Indicador de Fases del Protocolo -->
+      <nav aria-label="Fases del Protocolo" class="flex items-center gap-1 sm:gap-1.5 order-3 xl:order-2 w-full xl:w-auto justify-center pt-1 xl:pt-0 border-t xl:border-t-0 border-slate-800/70">
+        <div id="stepBadge1" class="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-cyan-500/50 bg-cyan-500/15 text-cyan-300 text-[11px] font-medium transition-all">
+          <span class="w-4 h-4 rounded-full bg-cyan-500 text-slate-950 font-bold text-[10px] flex items-center justify-center">1</span>
+          <span>Encuadre</span>
+        </div>
+        <div class="w-3 h-[2px] bg-slate-800" id="stepLine1"></div>
+        <div id="stepBadge2A" class="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-800 bg-slate-900/70 text-slate-500 text-[11px] font-medium transition-all">
+          <span class="w-4 h-4 rounded-full bg-slate-800 text-slate-400 font-bold text-[10px] flex items-center justify-center">2A</span>
+          <span>Cero Basal (3s)</span>
+        </div>
+        <div class="w-3 h-[2px] bg-slate-800" id="stepLine2"></div>
+        <div id="stepBadge2B" class="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-800 bg-slate-900/70 text-slate-500 text-[11px] font-medium transition-all">
+          <span class="w-4 h-4 rounded-full bg-slate-800 text-slate-400 font-bold text-[10px] flex items-center justify-center">2B</span>
+          <span>5 Ciclos</span>
+        </div>
+        <div class="w-3 h-[2px] bg-slate-800" id="stepLine3"></div>
+        <div id="stepBadge3" class="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-800 bg-slate-900/70 text-slate-500 text-[11px] font-medium transition-all">
+          <span class="w-4 h-4 rounded-full bg-slate-800 text-slate-400 font-bold text-[10px] flex items-center justify-center">3</span>
+          <span>Informe PDF</span>
+        </div>
+      </nav>
+
+      <!-- Controles Globales: Switch Modular Abdomen + Sensibilidad AGC + Simulación Demo -->
+      <div class="flex flex-wrap items-center gap-2 order-2 xl:order-3">
+        
+        <!-- INTERRUPTOR MODULAR DE ABDOMEN -->
+        <button id="headerAbdomenToggle" type="button" role="switch" aria-checked="true"
+          class="flex items-center gap-2 bg-[#111827] hover:bg-slate-800/90 border border-purple-500/40 rounded-lg px-2.5 py-1 transition cursor-pointer">
+          <span class="w-2 h-2 rounded-full bg-[#C084FC]" id="headerAbdDot"></span>
+          <span class="text-[10px] sm:text-[11px] font-mono text-slate-200">Módulo Abdomen:</span>
+          <span id="headerAbdStateText" class="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-purple-500/20 text-[#C084FC]">
+            ACTIVADO
+          </span>
+        </button>
+
+        <!-- Selector Sensibilidad AGC -->
+        <div class="hidden sm:flex items-center gap-1 bg-[#111827] border border-[#1E293B] rounded-lg px-2 py-1">
+          <span class="text-[10px] font-mono text-slate-400">AGC:</span>
+          <div class="inline-flex rounded bg-slate-950 p-0.5" role="group" aria-label="Sensibilidad AGC">
+            <button type="button" data-sens="low" class="sens-btn px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-400 hover:text-white transition">Baja</button>
+            <button type="button" data-sens="normal" class="sens-btn px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-cyan-500 text-slate-950 transition">Normal</button>
+            <button type="button" data-sens="high" class="sens-btn px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-400 hover:text-white transition">Alta</button>
+          </div>
+        </div>
+
+        <!-- Selector Perfil Demo -->
+        <div class="flex items-center gap-1.5 bg-[#111827] border border-[#1E293B] rounded-lg px-2 py-1">
+          <select id="globalDemoPresetSelect" aria-label="Perfil de Simulación Clínica" class="bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] sm:text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500">
+            <option value="normal">Normal Basal 1:2</option>
+            <option value="obstructive">Limitación Esp. 1:3.5</option>
+            <option value="costal_anxiety">Costal Sup. / Ansiedad</option>
+            <option value="asymmetry_hd">Asimetría HD &lt; HI</option>
+          </select>
+          <button id="btnQuickDemo" type="button" class="px-2 py-0.5 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-[10px] font-mono font-semibold transition">
+            Demo
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Banner de Notificaciones Inline (Sin alert/confirm) -->
+  <div id="toastBanner" class="hidden max-w-[1460px] mx-auto w-full px-3 sm:px-5 pt-2">
+    <div id="toastContent" class="rounded-xl px-3.5 py-2 text-xs border flex items-center justify-between gap-3"></div>
+  </div>
+
+  <!-- Video Fuente Oculto -->
+  <video id="webcamVideo" playsinline muted class="hidden"></video>
+
+  <!-- =====================================================================
+       CONTENEDOR PRINCIPAL
+       ===================================================================== -->
+  <main class="flex-1 max-w-[1460px] w-full mx-auto px-3 sm:px-5 py-3">
+
+    <!-- ===================================================================
+         FASE 1: CALIBRACIÓN ÓPTICA, ENCUADRE Y INTERRUPTOR MÓDULO ABDOMINAL
+         =================================================================== -->
+    <section id="phase1Section" class="space-y-3">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        
+        <!-- Visor Anatómico Multizona (7 cols) -->
+        <div class="lg:col-span-7 clinical-panel rounded-2xl p-3.5 space-y-2.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 class="text-sm sm:text-base font-semibold text-white flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 pulse-live"></span>
+                <span>Visor Anatómico IA (Hemitórax Derecho, Izquierdo y Abdomen)</span>
+              </h2>
+              <p class="text-xs text-slate-400">Anclaje automático sobre hombros, esternón y zona umbilical.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="aiModelStatusBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                Cargando Pose IA...
+              </span>
+              <span id="cameraSourceBadge" class="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700">
+                Sensor en espera
+              </span>
+            </div>
+          </div>
+
+          <!-- Canvas de Calibración -->
+          <div class="relative w-full aspect-video bg-slate-950 rounded-xl overflow-hidden border border-[#1E293B] flex items-center justify-center">
+            <canvas id="calibrationCanvas" class="w-full h-full object-cover"></canvas>
+
+            <!-- Overlay Inicial -->
+            <div id="cameraStartOverlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-5 text-center space-y-3">
+              <div class="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div class="max-w-md space-y-1">
+                <h3 class="text-sm sm:text-base font-semibold text-white">Activa el Sensor Óptico Multizona</h3>
+                <p class="text-xs text-slate-400">
+                  Rastrea ambos hemitórax (HD y HI) y opcionalmente el abdomen para evaluar relación I:E, simetría costal, predominio diafragmático y atrapamiento aéreo.
+                </p>
+              </div>
+              <div class="flex flex-col sm:flex-row items-center gap-2.5 pt-1">
+                <button id="btnActivateCamera" type="button" class="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-semibold text-xs sm:text-sm transition shadow-lg shadow-cyan-500/20 flex items-center gap-2">
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  <span>Activar Cámara Web</span>
+                </button>
+                <button id="btnActivateDemo" type="button" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition">
+                  Modo Simulación Demo
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Leyenda Anatómica + Switch Rápido de Abdomen -->
+          <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+            <div class="flex flex-wrap items-center gap-3">
+              <span class="flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-[#10B981]"></span> HD (16 nodos)
+              </span>
+              <span class="flex items-center gap-1.5">
+                <span class="w-2.5 h-2.5 rounded-full bg-[#38BDF8]"></span> HI (16 nodos)
+              </span>
+              <span id="legendAbdomenItem" class="flex items-center gap-1.5 text-[#C084FC]">
+                <span class="w-2.5 h-2.5 rounded-full bg-[#C084FC]"></span> Abdomen (16 nodos)
+              </span>
+            </div>
+
+            <label class="inline-flex items-center gap-2 cursor-pointer bg-slate-900 px-2.5 py-1 rounded-lg border border-purple-500/30">
+              <input id="phase1AbdomenCheckbox" type="checkbox" checked class="rounded bg-slate-950 border-slate-700 text-purple-500 focus:ring-0 w-3.5 h-3.5" />
+              <span class="text-[11px] font-mono text-slate-200">Incluir Zona Abdominal</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Panel Semáforo de Calidad Pre-Captura (5 cols) -->
+        <div class="lg:col-span-5 clinical-panel rounded-2xl p-4 space-y-3">
+          <div class="border-b border-[#1E293B] pb-2.5">
+            <span class="text-[10px] font-mono uppercase tracking-wider text-cyan-400">Control de Calidad Óptica y Encuadre</span>
+            <h2 class="text-sm sm:text-base font-semibold text-white">Validación Previa a Calibración Basal</h2>
+            <p class="text-xs text-slate-400">
+              Completa las 4 validaciones en verde para pasar a la calibración de 3 segundos en espiración máxima.
+            </p>
+          </div>
+
+          <!-- 1. Iluminación Rec. 709 -->
+          <div class="p-3 rounded-xl bg-slate-900/90 border border-[#1E293B] space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-slate-200 flex items-center gap-2">
+                <span id="dotLight" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                1. Iluminación Torácica (Rec. 709)
+              </span>
+              <span id="badgeLight" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                0 / 255
+              </span>
+            </div>
+            <div class="relative w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div class="absolute top-0 bottom-0 left-[12.5%] right-[2.8%] bg-emerald-500/25"></div>
+              <div id="barLight" class="h-full bg-slate-500 rounded-full transition-all duration-150" style="width: 0%"></div>
+            </div>
+            <p id="msgLight" class="text-[11px] text-slate-400">Activa la cámara para leer luminancia Rec. 709 (rango válido 32–248).</p>
+          </div>
+
+          <!-- 2. Detección Anatómica y Malla -->
+          <div class="p-3 rounded-xl bg-slate-900/90 border border-[#1E293B] space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-slate-200 flex items-center gap-2">
+                <span id="dotAnatomy" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                2. Detección Anatómica y Malla Activa
+              </span>
+              <span id="badgeAnatomy" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                Esperando...
+              </span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div id="barAnatomy" class="h-full bg-slate-500 rounded-full transition-all duration-150" style="width: 0%"></div>
+            </div>
+            <p id="msgAnatomy" class="text-[11px] text-slate-400">Centra ambos hombros y el tórax superior frente a la cámara.</p>
+          </div>
+
+          <!-- 3. Alineación Frontal de Hombros -->
+          <div class="p-3 rounded-xl bg-slate-900/90 border border-[#1E293B] space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-slate-200 flex items-center gap-2">
+                <span id="dotAlignment" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                3. Alineación Frontal de Hombros
+              </span>
+              <span id="badgeAlignment" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                Pendiente
+              </span>
+            </div>
+            <p id="msgAlignment" class="text-[11px] text-slate-400">Evita rotar el tronco para no generar falsa asimetría óptica HD vs HI.</p>
+          </div>
+
+          <!-- 4. Estabilidad Postural y Encuadre Abdominal -->
+          <div class="p-3 rounded-xl bg-slate-900/90 border border-[#1E293B] space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-medium text-slate-200 flex items-center gap-2">
+                <span id="dotStability" class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                <span id="labelStabilityTitle">4. Estabilidad y Encuadre Abdominal</span>
+              </span>
+              <span id="badgeStability" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                0.0 / 2.0 s
+              </span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+              <div id="barStability" class="h-full bg-slate-500 rounded-full transition-all duration-150" style="width: 0%"></div>
+            </div>
+            <p id="msgStability" class="text-[11px] text-slate-400">Mantén el torso quieto y la zona umbilical visible en cámara.</p>
+          </div>
+
+          <!-- Botón Iniciar Evaluación + Forzar Inicio Manual -->
+          <div class="pt-1 space-y-1.5">
+            <button id="btnStartPhase2" type="button" disabled
+              class="w-full py-2.5 px-4 rounded-xl font-semibold text-xs sm:text-sm transition-all flex items-center justify-center gap-2
+                     disabled:bg-slate-800 disabled:text-slate-500 disabled:border disabled:border-slate-700 disabled:cursor-not-allowed
+                     enabled:bg-gradient-to-r enabled:from-emerald-500 enabled:to-cyan-500 enabled:hover:from-emerald-400 enabled:hover:to-cyan-400 enabled:text-slate-950 enabled:shadow-lg enabled:shadow-emerald-500/20">
+              <svg id="lockIconPhase2" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span>Iniciar Evaluación (Cero Basal 3s + 5 Ciclos)</span>
+            </button>
+
+            <div class="flex flex-col items-center gap-0.5">
+              <p id="gatekeeperSummary" class="text-center text-[11px] text-slate-500">
+                Bloqueado: completa los 4 indicadores en verde para continuar.
+              </p>
+              <button id="btnForceStartPhase2" type="button" class="hidden text-[11px] font-mono text-slate-400 hover:text-cyan-300 underline underline-offset-2 transition">
+                Forzar inicio manual
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================
+         FASE 2 (2A CALIBRACIÓN 3S EN ESPIRACIÓN MÁXIMA + 2B MONITOR 5 CICLOS)
+         =================================================================== -->
+    <section id="phase2Section" class="hidden space-y-2.5">
+      
+      <!-- Franja Superior: Progreso de 5 Ciclos + Barra Proporcional I:E + Botón Recalibrar Cero (3s) -->
+      <div class="clinical-panel rounded-xl px-3.5 py-2 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5">
+        <div class="flex flex-wrap items-center justify-between lg:justify-start gap-2.5 shrink-0">
+          <div class="flex items-center gap-2">
+            <span id="stabilizationTag" class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[11px]">
+              Calibrando Cero (3.0s)...
+            </span>
+            <span class="text-xs sm:text-sm font-bold font-mono text-white">
+              Ciclo <span id="cycleCountText" class="text-cyan-400">0</span> / 5
+            </span>
+          </div>
+          <div class="flex items-center gap-1.5" id="cycleDots">
+            <span class="w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700 transition-all"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700 transition-all"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700 transition-all"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700 transition-all"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700 transition-all"></span>
+          </div>
+          <button id="btnRecalibrateZero" type="button" class="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-[10px] sm:text-[11px] font-mono font-semibold transition">
+            ↺ Recalibrar Cero (3s)
+          </button>
+        </div>
+
+        <!-- Barra Proporcional I : E : Pausa -->
+        <div class="flex-1 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div class="flex-1 h-4 bg-slate-950 rounded-md overflow-hidden border border-[#1E293B] flex p-0.5 gap-0.5">
+            <div id="segBarI" class="h-full bg-[#06B6D4] rounded-l transition-all duration-200 flex items-center justify-center text-[9px] font-mono font-bold text-slate-950" style="width: 33%">I</div>
+            <div id="segBarE" class="h-full bg-[#F59E0B] transition-all duration-200 flex items-center justify-center text-[9px] font-mono font-bold text-slate-950" style="width: 57%">E</div>
+            <div id="segBarP" class="h-full bg-[#8B5CF6] rounded-r transition-all duration-200 flex items-center justify-center text-[9px] font-mono font-bold text-white" style="width: 10%">P</div>
+          </div>
+          <div class="flex items-center justify-between sm:justify-end gap-2 text-[11px] font-mono shrink-0">
+            <span class="text-[#22D3EE]" id="liveBarLabelI">I: --s</span>
+            <span class="text-[#FBBF24]" id="liveBarLabelE">E: --s</span>
+            <span class="text-[#A78BFA]" id="liveBarLabelP">P: --s</span>
+            <span class="px-2 py-0.5 rounded bg-slate-800 text-white font-bold" id="liveBarRatio">1 : --</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cockpit Principal Fase 2 (12 Columnas) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+        
+        <!-- Columna Izquierda (5 cols): Video + Panel Simetría Hemitorácica + Panel Predominio Abdominal -->
+        <div class="lg:col-span-5 flex flex-col justify-between gap-2.5">
+          
+          <!-- Visor Video en Vivo con Overlay de Calibración 3s -->
+          <div class="clinical-panel rounded-2xl p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-mono uppercase tracking-wider text-slate-400" id="liveNodesSubtitle">
+                Rastreo Multizona (HD 16 + HI 16 + ABD 16 Nodos)
+              </span>
+              <span id="liveAirTrappingBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                Cero Basal: Estable
+              </span>
+            </div>
+
+            <div class="relative w-full aspect-video bg-slate-950 rounded-xl overflow-hidden border border-[#1E293B]">
+              <canvas id="liveTrackingCanvas" class="w-full h-full object-cover"></canvas>
+
+              <!-- FASE 2A: PANEL VISUAL PROMINENTE DE CUENTA REGRESIVA 3 SEGUNDOS EN ESPIRACIÓN MÁXIMA -->
+              <div id="basalCountdownOverlay" class="absolute inset-0 bg-slate-950/88 backdrop-blur-md flex flex-col items-center justify-center p-4 text-center space-y-2.5 z-20">
+                <span class="text-[10px] font-mono uppercase tracking-widest px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  FASE 2A · CALIBRACIÓN DE PUNTO CERO BASAL (x_basal = 0)
+                </span>
+                <div id="basalCountdownNumber" class="text-5xl sm:text-6xl font-extrabold font-mono text-amber-400 leading-none">
+                  3
+                </div>
+                <p class="text-xs sm:text-sm font-bold text-white max-w-sm leading-snug">
+                  BOTA TODO EL AIRE (Espiración máxima) y quédate quieto para fijar tu punto cero basal
+                </p>
+                <div class="w-full max-w-xs h-2.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                  <div id="basalCountdownBar" class="h-full bg-gradient-to-r from-amber-500 to-cyan-400 transition-all duration-75" style="width: 0%"></div>
+                </div>
+                <p id="basalCountdownSub" class="text-[11px] font-mono text-slate-300">
+                  Registrando posición mínima de tórax y abdomen...
+                </p>
+              </div>
+
+              <!-- Alerta de Artefacto Postural -->
+              <div id="artifactAlertBadge" class="hidden absolute bottom-2 left-2 right-2 px-2.5 py-1 rounded-lg bg-red-600/95 text-white text-[11px] font-medium text-center shadow-lg z-10">
+                Movimiento postural brusco detectado: ciclo descartado
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 1: Simetría Hemitorácica en Vivo (HD % vs. HI %) -->
+          <div class="clinical-panel rounded-2xl p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-[#10B981]"></span>
+                <h3 class="text-xs font-bold text-white">Simetría Hemitorácica (HD % vs. HI %)</h3>
+              </div>
+              <span id="liveAsymBadge" class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                Simétrico · &lt;15%
+              </span>
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex justify-between text-[11px] font-mono font-bold">
+                <span class="text-[#10B981]" id="labelPctHD">HD (Der): 50%</span>
+                <span class="text-slate-400 text-[10px]" id="labelAsymIndex">Asim: 0.0% • Sinc: 98%</span>
+                <span class="text-[#38BDF8]" id="labelPctHI">HI (Izq): 50%</span>
+              </div>
+              <div class="w-full h-3 bg-slate-950 rounded-md overflow-hidden border border-[#1E293B] flex p-0.5 gap-0.5">
+                <div id="barContribHD" class="h-full bg-[#10B981] rounded-l transition-all duration-200" style="width: 50%"></div>
+                <div id="barContribHI" class="h-full bg-[#38BDF8] rounded-r transition-all duration-200" style="width: 50%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 2: Predominio Ventilatorio (Tórax % vs. Abdomen %) — Visible solo si Módulo Abdomen está activo -->
+          <div id="liveAbdomenPanel" class="clinical-panel rounded-2xl p-3 space-y-2 border-l-2 border-l-[#C084FC]">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-[#C084FC]"></span>
+                <h3 class="text-xs font-bold text-white">Predominio Ventilatorio (Tórax % vs. Abdomen %)</h3>
+              </div>
+              <span id="liveThoracoAbdBadge" class="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-purple-500/15 text-[#C084FC] border border-purple-500/30">
+                Costo-Diafragmático
+              </span>
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex justify-between text-[11px] font-mono font-bold">
+                <span class="text-cyan-300" id="labelPctThorax">Tórax: 45%</span>
+                <span class="text-slate-400 text-[10px]" id="labelThoracoAbdSync">Sincronía Toracoabd: 96%</span>
+                <span class="text-[#C084FC]" id="labelPctAbdomen">Abdomen: 55%</span>
+              </div>
+              <div class="w-full h-3 bg-slate-950 rounded-md overflow-hidden border border-[#1E293B] flex p-0.5 gap-0.5">
+                <div id="barContribThorax" class="h-full bg-cyan-400 rounded-l transition-all duration-200" style="width: 45%"></div>
+                <div id="barContribAbdomen" class="h-full bg-[#C084FC] rounded-r transition-all duration-200" style="width: 55%"></div>
+              </div>
+            </div>
+
+            <!-- Alerta de Movimiento Paradójico Toracoabdominal -->
+            <div id="paradoxicalAlertBox" class="hidden px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-[10px] font-mono text-rose-200">
+              ⚠ Alerta: Asincronía / Movimiento paradójico toracoabdominal detectado.
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Columna Derecha (7 cols): Cuadro Fase Detectada + KPIs + 2 Osciloscopios (95px) -->
+        <div class="lg:col-span-7 flex flex-col justify-between gap-2.5">
+          
+          <!-- Fila Superior: Cuadro Fase Detectada (6 cols) + 4 KPIs (6 cols) -->
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+            
+            <!-- CUADRO DE FASE RESPIRATORIA DETECTADA -->
+            <div id="livePhaseCard" class="sm:col-span-6 rounded-2xl p-3 border-2 border-[#8B5CF6]/80 bg-[#8B5CF6]/15 flex items-center justify-between gap-2.5 transition-all duration-150 shadow-lg">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <div id="livePhaseIconBox" class="w-11 h-11 rounded-xl bg-[#8B5CF6]/25 border border-[#A78BFA]/50 flex items-center justify-center text-[#A78BFA] shrink-0">
+                  <svg id="livePhaseSvg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6" />
+                  </svg>
+                </div>
+                <div class="min-w-0">
+                  <div class="text-[9px] font-mono uppercase tracking-wider text-slate-300/80">Fase Respiratoria Detectada</div>
+                  <div id="livePhaseTitle" class="text-base sm:text-lg font-extrabold tracking-tight text-[#A78BFA] truncate">
+                    PAUSA / APNEA
+                  </div>
+                  <div id="livePhaseSubtitle" class="text-[11px] text-slate-300 truncate">
+                    Tórax detenido · Meseta sin flujo
+                  </div>
+                </div>
+              </div>
+              <div class="text-right shrink-0 bg-slate-950/80 px-2.5 py-1 rounded-xl border border-slate-800">
+                <div class="text-[9px] font-mono uppercase text-slate-400">Tiempo</div>
+                <div id="livePhaseTimer" class="text-sm sm:text-base font-bold font-mono text-white">0.0 s</div>
+              </div>
+            </div>
+
+            <!-- Grid 2x2 de KPIs -->
+            <div class="sm:col-span-6 grid grid-cols-2 gap-2">
+              <div class="clinical-panel rounded-xl px-3 py-2 border-l-2 border-l-[#06B6D4] flex flex-col justify-center">
+                <div class="text-[10px] text-slate-400">Inspiración (Ti)</div>
+                <div class="flex items-baseline justify-between gap-1">
+                  <span class="text-sm sm:text-base font-bold font-mono text-[#22D3EE]" id="kpiTi">0.00 s</span>
+                  <span class="text-[9px] font-mono text-slate-500">1.0–1.5s</span>
+                </div>
+              </div>
+              <div class="clinical-panel rounded-xl px-3 py-2 border-l-2 border-l-[#F59E0B] flex flex-col justify-center">
+                <div class="text-[10px] text-slate-400">Espiración (Te)</div>
+                <div class="flex items-baseline justify-between gap-1">
+                  <span class="text-sm sm:text-base font-bold font-mono text-[#FBBF24]" id="kpiTe">0.00 s</span>
+                  <span class="text-[9px] font-mono text-slate-500">2.0–3.0s</span>
+                </div>
+              </div>
+              <div class="clinical-panel rounded-xl px-3 py-2 border-l-2 border-l-emerald-500 flex flex-col justify-center">
+                <div class="text-[10px] text-slate-400">Relación I:E</div>
+                <div class="flex items-baseline justify-between gap-1">
+                  <span class="text-sm sm:text-base font-bold font-mono text-white" id="kpiIE">1 : --</span>
+                  <span class="text-[9px] font-mono text-slate-500">1:1.5–2.2</span>
+                </div>
+              </div>
+              <div class="clinical-panel rounded-xl px-3 py-2 border-l-2 border-l-[#8B5CF6] flex flex-col justify-center">
+                <div class="text-[10px] text-slate-400">Ritmo / Pausa</div>
+                <div class="flex items-baseline justify-between gap-1">
+                  <span class="text-xs sm:text-sm font-bold font-mono text-slate-200" id="kpiRpm">-- RPM</span>
+                  <span class="text-[10px] font-mono text-[#A78BFA]" id="kpiPause">0.0s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Doble Osciloscopio Compacto Sincronizado (95px cada uno) -->
+          <div class="clinical-panel rounded-2xl p-3 space-y-2.5 flex-1 flex flex-col justify-between">
+            <!-- Osciloscopio 1: Desplazamiento x(t) con Cero Basal Calibrado + Superposición HD/HI/ABD -->
+            <div class="space-y-1">
+              <div class="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                <span class="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-white"></span>
+                  1. Desplazamiento x(t) vs. Cero Basal Calibrado (x_basal = 0)
+                </span>
+                <label class="inline-flex items-center gap-1.5 cursor-pointer select-none text-[10px] font-mono text-slate-300">
+                  <input id="toggleSplitWaves" type="checkbox" checked class="rounded bg-slate-900 border-slate-700 text-cyan-500 focus:ring-0 w-3 h-3" />
+                  <span><span class="text-[#10B981]">HD</span> · <span class="text-[#38BDF8]">HI</span> · <span class="text-[#C084FC]">ABD</span></span>
+                </label>
+              </div>
+              <div class="w-full h-[95px] bg-slate-950 rounded-xl border border-[#1E293B] overflow-hidden">
+                <canvas id="displacementCanvas" class="w-full h-full block"></canvas>
+              </div>
+            </div>
+
+            <!-- Osciloscopio 2: Derivada Temporal Savitzky-Golay 7 puntos -->
+            <div class="space-y-1">
+              <div class="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                <span class="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <span class="w-2 h-2 rounded-full bg-[#22D3EE]"></span>
+                  2. Derivada Temporal Savitzky-Golay 7-pt v(t) = dx/dt
+                </span>
+                <div class="flex items-center gap-2 font-mono text-[10px]">
+                  <span class="text-[#22D3EE]">▲ v&gt;0 (Ti)</span>
+                  <span class="text-[#A78BFA]">■ Pausa</span>
+                  <span class="text-[#FBBF24]">▼ v&lt;0 (Te)</span>
+                </div>
+              </div>
+              <div class="w-full h-[95px] bg-slate-950 rounded-xl border border-[#1E293B] overflow-hidden">
+                <canvas id="derivativeCanvas" class="w-full h-full block"></canvas>
+              </div>
+            </div>
+
+            <!-- Controles Inferiores -->
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-[#1E293B]">
+              <button id="btnResetCapture" type="button" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700 transition">
+                Reiniciar Ciclos
+              </button>
+              <span class="text-[11px] text-slate-500 hidden sm:inline">Avance automático al ciclo 5 (o corte desde 3)</span>
+              <button id="btnFinishEarly" type="button" disabled
+                class="px-4 py-1.5 rounded-lg font-semibold text-xs transition
+                       disabled:bg-slate-800/60 disabled:text-slate-600 disabled:border disabled:border-slate-800 disabled:cursor-not-allowed
+                       enabled:bg-cyan-500 enabled:hover:bg-cyan-400 enabled:text-slate-950">
+                Finalizar y Evaluar
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================================
+         FASE 3: INFORME KINÉSICO CON PROMEDIOS ± DE Y EXPORTACIÓN A PDF
+         =================================================================== -->
+    <section id="phase3Section" class="hidden space-y-4">
+      
+      <!-- Cabecera de Resultados y Exportación PDF -->
+      <div class="clinical-panel rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-l-4 border-l-emerald-500">
+        <div>
+          <span class="text-[10px] font-mono uppercase tracking-wider text-emerald-400">Evaluación Funcional Kinésica Completada (Promedios ± DE)</span>
+          <h2 class="text-base sm:text-lg font-bold text-white">Informe Biomecánico — Relación I:E, Hemitórax y Patrón Toracoabdominal</h2>
+          <p class="text-xs text-slate-400">Métricas cuantitativas calibradas respecto al punto cero basal en espiración máxima.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+          <button id="btnNewEvaluation" type="button" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition">
+            Nueva Evaluación
+          </button>
+          <button id="btnDownloadPdf" type="button" class="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-cyan-500/20 flex items-center gap-2 transition">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span>Descargar Informe PDF</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tarjetas KPI con Promedios ± Desviación Estándar (± DE) -->
+      <div id="phase3KpiGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5"></div>
+
+      <!-- Banner de Hallazgo Biomecánico Global -->
+      <div id="diagnosticBanner" class="rounded-2xl p-4 border space-y-1"></div>
+
+      <!-- Ficha Clínica Rápida Editable (Incrustada en PDF) -->
+      <div class="clinical-panel rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-mono uppercase tracking-wider text-cyan-400">Ficha Clínica Kinésica (Se incrusta en Informe_Biomecanico_PneumoVision.pdf)</h3>
+          <span class="text-[10px] font-mono text-slate-500">Todos los valores reportan Media ± DE</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div class="lg:col-span-2">
+            <label for="inputPatientName" class="block text-[11px] text-slate-400 mb-1">Nombre / ID Paciente</label>
+            <input id="inputPatientName" type="text" placeholder="Ej. Javier Soto — FICHA-209" class="w-full bg-slate-950 border border-[#1E293B] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500" />
+          </div>
+          <div>
+            <label for="inputPatientAge" class="block text-[11px] text-slate-400 mb-1">Edad (años)</label>
+            <input id="inputPatientAge" type="number" min="4" max="115" placeholder="Ej. 38" class="w-full bg-slate-950 border border-[#1E293B] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500" />
+          </div>
+          <div>
+            <label for="inputBorgScale" class="block text-[11px] text-slate-400 mb-1">Escala Borg Mod. (0–10)</label>
+            <select id="inputBorgScale" class="w-full bg-slate-950 border border-[#1E293B] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500">
+              <option value="0 — Reposo absoluto">0 — Reposo absoluto</option>
+              <option value="0.5 — Muy, muy leve">0.5 — Muy, muy leve</option>
+              <option value="1 — Muy leve">1 — Muy leve</option>
+              <option value="2 — Leve" selected>2 — Leve</option>
+              <option value="3 — Moderada">3 — Moderada</option>
+              <option value="4 — Algo severa">4 — Algo severa</option>
+              <option value="5 — Severa">5 — Severa</option>
+              <option value="7 — Muy severa">7 — Muy severa</option>
+              <option value="10 — Máxima">10 — Máxima</option>
+            </select>
+          </div>
+          <div>
+            <label for="inputSpo2" class="block text-[11px] text-slate-400 mb-1">SpO2 Basal (%)</label>
+            <input id="inputSpo2" type="number" min="60" max="100" value="98" class="w-full bg-slate-950 border border-[#1E293B] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500" />
+          </div>
+        </div>
+        <div>
+          <label for="inputKinesioNotes" class="block text-[11px] text-slate-400 mb-1">Observaciones del Kinesiólogo</label>
+          <input id="inputKinesioNotes" type="text" placeholder="Ej. Calibración basal en espiración máxima completada. Se evalúa excursión bilateral y patrón diafragmático..." class="w-full bg-slate-950 border border-[#1E293B] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500" />
+        </div>
+      </div>
+
+      <!-- Paneles Visuales Bilaterales / Abdominales + Hallazgos Descriptivos -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- Izquierda (7 cols): Barras Comparativas + Gráfica Capturada -->
+        <div class="lg:col-span-7 clinical-panel rounded-2xl p-4 space-y-3.5">
+          <h3 class="text-sm font-semibold text-white">Balance Compartimental y Atrapamiento Aéreo (Media ± DE)</h3>
+
+          <!-- Balance Hemitorácico HD vs HI -->
+          <div class="p-3 rounded-xl bg-slate-950/90 border border-[#1E293B] space-y-1.5">
+            <div class="flex flex-wrap items-center justify-between gap-1 text-xs font-mono font-bold">
+              <span class="text-[#10B981]" id="summaryPctHD">HD (Der): 50.0 ± 0.0%</span>
+              <span class="text-[#38BDF8]" id="summaryPctHI">HI (Izq): 50.0 ± 0.0%</span>
+            </div>
+            <div class="w-full h-4 bg-slate-900 rounded-md overflow-hidden border border-slate-800 flex p-0.5 gap-0.5">
+              <div id="summaryBarHD" class="h-full bg-[#10B981] rounded-l" style="width: 50%"></div>
+              <div id="summaryBarHI" class="h-full bg-[#38BDF8] rounded-r" style="width: 50%"></div>
+            </div>
+            <div class="flex justify-between text-[11px] font-mono text-slate-400">
+              <span id="summaryAsymVal">Asimetría Bilateral: 0.0 ± 0.0% (Normal &lt; 15%)</span>
+              <span id="summarySyncVal">Sincronía Bilateral: 98%</span>
+            </div>
+          </div>
+
+          <!-- Balance Torácico vs Abdominal (Visible si Abdomen estuvo activo) -->
+          <div id="summaryAbdomenBox" class="p-3 rounded-xl bg-slate-950/90 border border-purple-500/30 space-y-1.5">
+            <div class="flex flex-wrap items-center justify-between gap-1 text-xs font-mono font-bold">
+              <span class="text-cyan-300" id="summaryPctThorax">Tórax Sup.: 45.0 ± 0.0%</span>
+              <span class="text-[#C084FC]" id="summaryPctAbdomen">Abdomen: 55.0 ± 0.0%</span>
+            </div>
+            <div class="w-full h-4 bg-slate-900 rounded-md overflow-hidden border border-slate-800 flex p-0.5 gap-0.5">
+              <div id="summaryBarThorax" class="h-full bg-cyan-400 rounded-l" style="width: 45%"></div>
+              <div id="summaryBarAbdomen" class="h-full bg-[#C084FC] rounded-r" style="width: 55%"></div>
+            </div>
+            <div class="flex justify-between text-[11px] font-mono text-slate-400">
+              <span id="summaryPredominanceLabel">Patrón: Costo-Diafragmático Equilibrado</span>
+              <span id="summaryThoracoAbdSync">Sincronía Toracoabd: 96%</span>
+            </div>
+          </div>
+
+          <!-- Trazado Cinemático Capturado -->
+          <div class="space-y-1">
+            <div class="flex items-center justify-between text-[11px] font-mono text-slate-400">
+              <span>TRAZADO CINEMÁTICO RESPECTO A CERO BASAL (x_basal = 0)</span>
+              <span><span class="text-[#10B981]">HD</span> · <span class="text-[#38BDF8]">HI</span> · <span class="text-[#C084FC]">ABD</span></span>
+            </div>
+            <div class="w-full h-36 bg-slate-950 rounded-xl border border-[#1E293B] overflow-hidden">
+              <canvas id="summaryWaveCanvas" class="w-full h-full block"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Derecha (5 cols): Hallazgos Biomecánicos Descriptivos -->
+        <div class="lg:col-span-5 clinical-panel rounded-2xl p-4 space-y-3 flex flex-col justify-between">
+          <div class="space-y-2.5">
+            <h3 class="text-sm font-semibold text-white">Interpretación Kinésica Funcional</h3>
+            <div id="clinicalFindingsContainer" class="space-y-2.5"></div>
+          </div>
+
+          <div class="p-3 rounded-xl bg-slate-950/90 border border-[#1E293B] text-[11px] text-slate-400 leading-relaxed">
+            <strong class="text-slate-200">Nota Legal Kinésica:</strong> PneumoVision Pro cuantifica la cinemática externa de la pared toracoabdominal mediante visión artificial sin contacto. Constituye una herramienta de evaluación funcional kinésica y biofeedback; no emite diagnósticos médicos ni sustituye pruebas de función pulmonar.
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla Detallada de los 5 Ciclos -->
+      <div class="clinical-panel rounded-2xl p-4 space-y-2.5">
+        <h3 class="text-sm font-semibold text-white">Desglose Ciclo por Ciclo (Ciclo #1 a #5)</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="border-b border-[#1E293B] text-[10px] sm:text-[11px] font-mono uppercase text-slate-400">
+                <th class="py-2 pr-2">Ciclo</th>
+                <th class="py-2 px-2 text-[#22D3EE]">Ti (s)</th>
+                <th class="py-2 px-2 text-[#FBBF24]">Te (s)</th>
+                <th class="py-2 px-2 text-[#A78BFA]">Pausa (s)</th>
+                <th class="py-2 px-2">Ratio I:E</th>
+                <th class="py-2 px-2 text-[#10B981]">% HD</th>
+                <th class="py-2 px-2 text-[#38BDF8]">% HI</th>
+                <th class="py-2 px-2">Asim.</th>
+                <th class="py-2 px-2 text-[#C084FC]" id="thAbdCol">% ABD</th>
+                <th class="py-2 pl-2 text-right">Patrón del Ciclo</th>
+              </tr>
+            </thead>
+            <tbody id="cyclesTableBody" class="divide-y divide-slate-800/70 text-xs font-mono"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- =====================================================================
+       MOTOR DE VISIÓN ARTIFICIAL, CALIBRACIÓN CERO BASAL 3S Y ABDOMEN_MODULE
+       ===================================================================== -->
+  <script>
+    /**
+     * =======================================================================
+     * MÓDULO ABDOMINAL AISLADO (ABDOMEN_MODULE)
+     * Diseñado de forma independiente para activarse, desactivarse o retirarse
+     * fácilmente sin afectar el análisis del Hemitórax Derecho (HD) e Izquierdo (HI).
+     * =======================================================================
+     */
+    const ABDOMEN_MODULE = {
+      enabled: true, // Interruptor maestro del módulo abdominal
+      nodes: [],     // 16 nodos sub-píxel (rejilla 4x4 entre margen costal y línea umbilical)
+      rawBoxNorm: { x: 0.34, y: 0.62, w: 0.32, h: 0.24 },
+      mirrorBoxNorm: { x: 0.34, y: 0.62, w: 0.32, h: 0.24 },
+      inFrame: true,
+
+      // Señales y métricas abdominales
+      rawDisp: 0,
+      zeroBasal: 0,
+      filtered: 0,
+      minCycle: 0,
+      maxCycle: 0,
+      livePctThorax: 45,
+      livePctAbdomen: 55,
+      liveSynchronyPct: 96,
+      isParadoxical: false,
+
+      /** Inicializa los 16 nodos sub-píxel de la región abdominal */
+      init() {
+        this.nodes = [];
+        for (let i = 0; i < 16; i++) {
+          this.nodes.push({ rawNx: 0.5, rawNy: 0.72, mirrorNx: 0.5, mirrorNy: 0.72, offsetY: 0, active: false });
+        }
+      },
+
+      /** Reinicia acumuladores y línea base abdominal */
+      resetSignal() {
+        this.rawDisp = 0;
+        this.zeroBasal = 0;
+        this.filtered = 0;
+        this.minCycle = 0;
+        this.maxCycle = 0;
+        this.livePctThorax = 45;
+        this.livePctAbdomen = 55;
+        this.liveSynchronyPct = 96;
+        this.isParadoxical = false;
+      },
+
+      /** Calcula el ROI abdominal a partir de hombros, margen costal y caderas (23, 24) */
+      updateGeometry(rawStore, mirrorStore, leftHip, rightHip) {
+        const thoraxBottomY = rawStore.fullThoraxBox.y + rawStore.fullThoraxBox.h;
+        const midX = rawStore.midlineX;
+        const width = rawStore.fullThoraxBox.w * 0.88;
+
+        let abdBottomY = thoraxBottomY + rawStore.fullThoraxBox.h * 0.62;
+        if (leftHip && rightHip && (leftHip.visibility || 0) >= 0.4 && (rightHip.visibility || 0) >= 0.4) {
+          const midHipY = (leftHip.y + rightHip.y) * 0.5;
+          if (midHipY > thoraxBottomY + 0.06) {
+            abdBottomY = Math.min(0.98, midHipY * 0.96);
+          }
+        }
+
+        // Verificar si el abdomen cabe adecuadamente dentro del encuadre de cámara
+        this.inFrame = abdBottomY <= 0.96 && (abdBottomY - thoraxBottomY) >= 0.08;
+
+        const clampedTopY = Math.min(0.88, thoraxBottomY + 0.01);
+        const clampedBottomY = Math.min(0.98, Math.max(clampedTopY + 0.08, abdBottomY));
+        const xNorm = Math.max(0.03, midX - width * 0.5);
+        const wNorm = Math.min(0.94, width);
+        const hNorm = clampedBottomY - clampedTopY;
+
+        this.rawBoxNorm = { x: xNorm, y: clampedTopY, w: wNorm, h: hNorm };
+        this.mirrorBoxNorm = { x: 1 - (xNorm + wNorm), y: clampedTopY, w: wNorm, h: hNorm };
+
+        // Actualizar posiciones de los 16 nodos abdominales (4x4)
+        if (this.nodes.length !== 16) this.init();
+        for (let r = 0; r < 4; r++) {
+          const v = (r + 0.25) / 3.5;
+          for (let c = 0; c < 4; c++) {
+            const u = (c + 0.25) / 3.5;
+            const pt = this.nodes[r * 4 + c];
+            pt.rawNx = Math.max(0.02, Math.min(0.98, this.rawBoxNorm.x + this.rawBoxNorm.w * u));
+            pt.rawNy = Math.max(0.02, Math.min(0.98, this.rawBoxNorm.y + this.rawBoxNorm.h * v));
+            pt.mirrorNx = 1 - pt.rawNx;
+            pt.mirrorNy = pt.rawNy;
+          }
+        }
+      },
+
+      /** Procesa desplazamiento abdominal respecto al cero basal y sincronía toracoabdominal */
+      processSignal(effectiveScale, waveformBuffer) {
+        if (!this.enabled) return;
+        const relABD = (this.rawDisp - this.zeroBasal) * effectiveScale;
+        this.filtered = this.filtered * 0.74 + relABD * 0.26;
+
+        if (this.filtered < this.minCycle) this.minCycle = this.filtered;
+        if (this.filtered > this.maxCycle) this.maxCycle = this.filtered;
+
+        // Calcular predominio Tórax vs Abdomen y Sincronía Toracoabdominal sobre ventana reciente
+        if (waveformBuffer.length >= 20) {
+          const recent = waveformBuffer.slice(-90);
+          let minT = Infinity, maxT = -Infinity, minA = Infinity, maxA = -Infinity;
+          let sumT = 0, sumA = 0;
+          recent.forEach((p) => {
+            if (p.xThorax < minT) minT = p.xThorax;
+            if (p.xThorax > maxT) maxT = p.xThorax;
+            if (p.xABD < minA) minA = p.xABD;
+            if (p.xABD > maxA) maxA = p.xABD;
+            sumT += p.xThorax;
+            sumA += p.xABD;
+          });
+          const ampT = Math.max(0.2, maxT - minT);
+          const ampA = Math.max(0.2, maxA - minA);
+          this.livePctThorax = (ampT / (ampT + ampA)) * 100;
+          this.livePctAbdomen = 100 - this.livePctThorax;
+
+          // Correlación de Pearson entre Tórax y Abdomen para detectar asincronía o movimiento paradójico
+          const n = recent.length;
+          const meanT = sumT / n;
+          const meanA = sumA / n;
+          let num = 0, denT = 0, denA = 0;
+          recent.forEach((p) => {
+            const dt = p.xThorax - meanT;
+            const da = p.xABD - meanA;
+            num += dt * da;
+            denT += dt * dt;
+            denA += da * da;
+          });
+          const denom = Math.sqrt(denT * denA);
+          const corr = denom > 0.0001 ? num / denom : 1;
+          this.liveSynchronyPct = Math.round(Math.max(0, Math.min(1, (corr + 1) * 0.5)) * 100);
+          this.isParadoxical = corr < -0.15 && ampT > 2.5 && ampA > 2.0;
+        }
+      },
+
+      /** Dibuja la caja y los 16 nodos violeta (#C084FC) de la zona abdominal sobre el visor */
+      drawOverlay(ctx, W, H) {
+        if (!this.enabled || this.nodes.length !== 16) return;
+        const b = this.mirrorBoxNorm;
+        const bx = b.x * W;
+        const by = b.y * H;
+        const bw = b.w * W;
+        const bh = b.h * H;
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(192, 132, 252, 0.11)';
+        ctx.strokeStyle = 'rgba(192, 132, 252, 0.85)';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw, bh, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        // Malla 4x4 abdominal
+        ctx.strokeStyle = 'rgba(192, 132, 252, 0.35)';
+        ctx.lineWidth = 1;
+        for (let r = 0; r < 4; r++) {
+          for (let c = 0; c < 4; c++) {
+            const idx = r * 4 + c;
+            const p = this.nodes[idx];
+            const px = p.mirrorNx * W;
+            const py = p.mirrorNy * H + p.offsetY;
+            if (c < 3) {
+              const pr = this.nodes[idx + 1];
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(pr.mirrorNx * W, pr.mirrorNy * H + pr.offsetY);
+              ctx.stroke();
+            }
+            if (r < 3) {
+              const pd = this.nodes[idx + 4];
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(pd.mirrorNx * W, pd.mirrorNy * H + pd.offsetY);
+              ctx.stroke();
+            }
+          }
+        }
+
+        this.nodes.forEach((p) => {
+          const px = p.mirrorNx * W;
+          const py = p.mirrorNy * H + p.offsetY;
+          ctx.fillStyle = '#C084FC';
+          ctx.beginPath();
+          ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.restore();
+
+        drawPillLabel(ctx, bx + bw * 0.5, by + bh - 12, 'ABDOMEN (16 NODOS)', '#C084FC');
+      }
+    };
+
+    /**
+     * =======================================================================
+     * ESTADO GLOBAL DE LA APLICACIÓN PNEUMOVISION PRO
+     * =======================================================================
+     */
+    const AppState = {
+      phase: 1, // 1: Encuadre, 2: Calibración Basal 3s + Captura 5 Ciclos, 3: Informe PDF
+      mode: 'idle', // 'idle' | 'webcam' | 'demo'
+      stream: null,
+      animFrameId: null,
+      lastFrameTime: 0,
+
+      // Modelo MediaPipe Pose
+      poseAI: {
+        instance: null,
+        ready: false,
+        failed: false,
+        busy: false,
+        lastSendTime: 0,
+        detected: false,
+        confidence: 0,
+        frontalAligned: true,
+        rotationWarning: '',
+        rawLandmarks: {
+          nose: { x: 0.50, y: 0.18, vis: 0 },
+          leftShoulder: { x: 0.67, y: 0.34, z: 0, vis: 0 },  // Landmark 11
+          rightShoulder: { x: 0.33, y: 0.34, z: 0, vis: 0 }, // Landmark 12
+          sternum: { x: 0.50, y: 0.38, vis: 0 },
+          midlineX: 0.50,
+          boxHD: { x: 0.32, y: 0.35, w: 0.17, h: 0.26 },
+          boxHI: { x: 0.51, y: 0.35, w: 0.17, h: 0.26 },
+          fullThoraxBox: { x: 0.32, y: 0.35, w: 0.36, h: 0.26 },
+          neckRefBox: { x: 0.42, y: 0.24, w: 0.16, h: 0.09 },
+        },
+        mirrorLandmarks: {
+          nose: { x: 0.50, y: 0.18 },
+          rightShoulder: { x: 0.33, y: 0.34 },
+          leftShoulder: { x: 0.67, y: 0.34 },
+          sternum: { x: 0.50, y: 0.38 },
+          midlineBottom: { x: 0.50, y: 0.61 },
+          rightCostal: { x: 0.35, y: 0.61 },
+          leftCostal: { x: 0.65, y: 0.61 },
+        },
+        prevShoulderCenter: null,
+        lastPoseDispY: 0,
+      },
+
+      // Gatekeeper Fase 1
+      gatekeeper: {
+        luminance: 0,
+        thoraxLuma: 0,
+        neckRefLuma: 0,
+        lightOk: false,
+        anatomyOk: false,
+        anatomyScore: 0,
+        alignmentOk: false,
+        stabilitySec: 0,
+        stabilityOk: false,
+      },
+
+      // FASE 2A: Calibración Basal de 3 Segundos en Espiración Máxima
+      basalCalib3s: {
+        active: false,
+        completed: false,
+        elapsed: 0,
+        duration: 3.0,
+        minGlobal: Infinity,
+        minHD: Infinity,
+        minHI: Infinity,
+        minABD: Infinity,
+        endSamplesGlobal: [],
+        endSamplesHD: [],
+        endSamplesHI: [],
+        endSamplesABD: [],
+      },
+
+      // 32 Nodos Sub-píxel Torácicos (16 HD + 16 HI)
+      nodesHD: [],
+      nodesHI: [],
+
+      // Señales Respiratorias Referenciadas al Cero Basal (x_basal = 0)
+      signal: {
+        sensitivityLevel: 'normal',
+        userMultiplier: 1.0,
+        agcGain: 1.0,
+
+        rawDispHD: 0,
+        rawDispHI: 0,
+
+        zeroBasalHD: 0,
+        zeroBasalHI: 0,
+        zeroBasalGlobal: 0,
+
+        filteredHD: 0,
+        filteredHI: 0,
+        filteredThorax: 0,
+        filteredGlobal: 0,
+        prevFilteredGlobal: 0,
+
+        xHistory: [],
+        derivativeV: 0,
+        vHistory: [],
+        waveformBuffer: [],
+        maxBufferPoints: 320,
+        isArtifact: false,
+
+        // Métricas en vivo
+        livePctHD: 50,
+        livePctHI: 50,
+        liveAsymPct: 0,
+        liveSynchronyPct: 98,
+        airTrappingDetected: false,
+        airTrappingOffsetPct: 0,
+      },
+
+      // Máquina de Estados de los 5 Ciclos
+      respState: {
+        currentPhase: 'PAUSA',
+        phaseDuration: 0,
+        currentCycle: {
+          ti: 0,
+          te: 0,
+          pause: 0,
+          hasInspired: false,
+          hasExpired: false,
+          minGlobal: 0,
+          maxGlobal: 0,
+          endValleyGlobal: 0,
+          minHD: 0,
+          maxHD: 0,
+          minHI: 0,
+          maxHI: 0,
+          minABD: 0,
+          maxABD: 0,
+        },
+        completedCycles: [],
+        targetCycles: 5,
+      },
+
+      report: null,
+    };
+
+    /**
+     * Canvas oculto dedicado al análisis de píxeles reales
+     */
+    const analysisCanvas = document.createElement('canvas');
+    analysisCanvas.width = 640;
+    analysisCanvas.height = 480;
+    const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
+    let prevGrayBuffer = null;
+    let prevGrayW = 0;
+    let prevGrayH = 0;
+
+    const DOM = {
+      video: document.getElementById('webcamVideo'),
+      calibCanvas: document.getElementById('calibrationCanvas'),
+      liveCanvas: document.getElementById('liveTrackingCanvas'),
+      dispCanvas: document.getElementById('displacementCanvas'),
+      derivCanvas: document.getElementById('derivativeCanvas'),
+      summaryCanvas: document.getElementById('summaryWaveCanvas'),
+      cameraStartOverlay: document.getElementById('cameraStartOverlay'),
+      cameraSourceBadge: document.getElementById('cameraSourceBadge'),
+      btnStartPhase2: document.getElementById('btnStartPhase2'),
+      btnForceStartPhase2: document.getElementById('btnForceStartPhase2'),
+      gatekeeperSummary: document.getElementById('gatekeeperSummary'),
+    };
+
+    function initAllGrids() {
+      AppState.nodesHD = [];
+      AppState.nodesHI = [];
+      for (let i = 0; i < 16; i++) {
+        AppState.nodesHD.push({ rawNx: 0.4, rawNy: 0.45, mirrorNx: 0.4, mirrorNy: 0.45, offsetY: 0, active: false });
+        AppState.nodesHI.push({ rawNx: 0.6, rawNy: 0.45, mirrorNx: 0.6, mirrorNy: 0.45, offsetY: 0, active: false });
+      }
+      ABDOMEN_MODULE.init();
+    }
+
+    /**
+     * Sincroniza la UI cuando se activa o desactiva el Módulo Abdomen
+     */
+    function setAbdomenModuleEnabled(isEnabled) {
+      ABDOMEN_MODULE.enabled = Boolean(isEnabled);
+
+      const headerBtn = document.getElementById('headerAbdomenToggle');
+      const headerState = document.getElementById('headerAbdStateText');
+      const headerDot = document.getElementById('headerAbdDot');
+      const phase1Chk = document.getElementById('phase1AbdomenCheckbox');
+      const legendAbd = document.getElementById('legendAbdomenItem');
+      const liveAbdPanel = document.getElementById('liveAbdomenPanel');
+      const liveSubtitle = document.getElementById('liveNodesSubtitle');
+      const stabTitle = document.getElementById('labelStabilityTitle');
+
+      headerBtn.setAttribute('aria-checked', String(ABDOMEN_MODULE.enabled));
+      if (phase1Chk) phase1Chk.checked = ABDOMEN_MODULE.enabled;
+
+      if (ABDOMEN_MODULE.enabled) {
+        headerBtn.className = 'flex items-center gap-2 bg-[#111827] hover:bg-slate-800/90 border border-purple-500/40 rounded-lg px-2.5 py-1 transition cursor-pointer';
+        headerState.textContent = 'ACTIVADO';
+        headerState.className = 'text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-purple-500/20 text-[#C084FC]';
+        headerDot.className = 'w-2 h-2 rounded-full bg-[#C084FC]';
+        if (legendAbd) legendAbd.classList.remove('hidden');
+        if (liveAbdPanel) liveAbdPanel.classList.remove('hidden');
+        if (liveSubtitle) liveSubtitle.textContent = 'Rastreo Multizona (HD 16 + HI 16 + ABD 16 Nodos)';
+        if (stabTitle) stabTitle.textContent = '4. Estabilidad y Encuadre Abdominal';
+      } else {
+        headerBtn.className = 'flex items-center gap-2 bg-[#111827] hover:bg-slate-800/90 border border-slate-700 rounded-lg px-2.5 py-1 transition cursor-pointer';
+        headerState.textContent = 'DESACTIVADO';
+        headerState.className = 'text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-400';
+        headerDot.className = 'w-2 h-2 rounded-full bg-slate-500';
+        if (legendAbd) legendAbd.classList.add('hidden');
+        if (liveAbdPanel) liveAbdPanel.classList.add('hidden');
+        if (liveSubtitle) liveSubtitle.textContent = 'Rastreo Bilateral (HD 16 + HI 16 Nodos)';
+        if (stabTitle) stabTitle.textContent = '4. Estabilidad Postural (2.0 s)';
+      }
+
+      if (AppState.phase === 3 && AppState.report) {
+        renderPhase3Report();
+      }
+    }
+
+    /**
+     * Inicializa MediaPipe Pose desde CDN oficial
+     */
+    function initMediaPipePose() {
+      const badge = document.getElementById('aiModelStatusBadge');
+      try {
+        if (typeof Pose === 'undefined') throw new Error('MediaPipe Pose no disponible');
+        const pose = new Pose({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+        });
+        pose.setOptions({
+          modelComplexity: 1,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+        pose.onResults(onMediaPipeResults);
+        AppState.poseAI.instance = pose;
+
+        pose.initialize().then(() => {
+          AppState.poseAI.ready = true;
+          badge.textContent = '● Pose IA Activa';
+          badge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+        }).catch(() => activateOpticalFallback());
+      } catch (e) {
+        activateOpticalFallback();
+      }
+    }
+
+    function activateOpticalFallback() {
+      AppState.poseAI.failed = true;
+      const badge = document.getElementById('aiModelStatusBadge');
+      badge.textContent = '● Respaldo Óptico';
+      badge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30';
+    }
+
+    /**
+     * Procesa puntos anatómicos reales de MediaPipe Pose
+     */
+    function onMediaPipeResults(results) {
+      AppState.poseAI.busy = false;
+      if (!results || !results.poseLandmarks) {
+        AppState.poseAI.detected = false;
+        AppState.poseAI.confidence = 0;
+        return;
+      }
+
+      const lm = results.poseLandmarks;
+      const nose = lm[0];
+      const leftSh = lm[11];  // Hombro Izquierdo
+      const rightSh = lm[12]; // Hombro Derecho
+      const leftHip = lm[23];
+      const rightHip = lm[24];
+
+      if (!leftSh || !rightSh) {
+        AppState.poseAI.detected = false;
+        return;
+      }
+
+      const shVis = Math.min(leftSh.visibility || 0, rightSh.visibility || 0);
+      AppState.poseAI.confidence = shVis;
+
+      const rLeftX = Math.max(0.03, Math.min(0.97, leftSh.x));
+      const rLeftY = Math.max(0.03, Math.min(0.92, leftSh.y));
+      const rRightX = Math.max(0.03, Math.min(0.97, rightSh.x));
+      const rRightY = Math.max(0.03, Math.min(0.92, rightSh.y));
+
+      const shoulderSpan = Math.hypot(rLeftX - rRightX, rLeftY - rRightY);
+      const midShX = (rLeftX + rRightX) * 0.5;
+      const midShY = (rLeftY + rRightY) * 0.5;
+
+      const validAnatomy = shVis >= 0.50 && shoulderSpan >= 0.14 && shoulderSpan <= 0.85 && midShX >= 0.18 && midShX <= 0.82;
+      AppState.poseAI.detected = validAnatomy;
+
+      // Verificar alineación frontal
+      const yTilt = Math.abs(rLeftY - rRightY);
+      const zDiff = Math.abs((leftSh.z || 0) - (rightSh.z || 0));
+      AppState.poseAI.frontalAligned = yTilt <= 0.08 && zDiff <= 0.28;
+      if (yTilt > 0.08) AppState.poseAI.rotationWarning = 'Hombros desnivelados: endereza la postura.';
+      else if (zDiff > 0.28) AppState.poseAI.rotationWarning = 'Tronco rotado: sitúate de frente a la cámara.';
+      else AppState.poseAI.rotationWarning = '';
+
+      // Proyección de caja torácica superior (HD y HI)
+      let thoraxHeightNorm = shoulderSpan * 0.82;
+      if (leftHip && rightHip && (leftHip.visibility || 0) >= 0.45 && (rightHip.visibility || 0) >= 0.45) {
+        const midHipY = (leftHip.y + rightHip.y) * 0.5;
+        if (midHipY > midShY + shoulderSpan * 0.45) {
+          thoraxHeightNorm = (midHipY - midShY) * 0.52;
+        }
+      }
+      thoraxHeightNorm = Math.max(0.10, Math.min(0.88 - midShY, thoraxHeightNorm));
+
+      const halfWidth = Math.max(0.08, shoulderSpan * 0.43);
+      const topY = Math.max(0.04, midShY + shoulderSpan * 0.04);
+      const gapHalf = 0.008;
+
+      const rawStore = AppState.poseAI.rawLandmarks;
+      rawStore.nose = { x: nose ? nose.x : midShX, y: nose ? nose.y : Math.max(0.04, midShY - shoulderSpan * 0.4), vis: nose ? (nose.visibility || 0) : 0 };
+      rawStore.leftShoulder = { x: rLeftX, y: rLeftY, z: leftSh.z || 0, vis: leftSh.visibility || 0 };
+      rawStore.rightShoulder = { x: rRightX, y: rRightY, z: rightSh.z || 0, vis: rightSh.visibility || 0 };
+      rawStore.sternum = { x: midShX, y: Math.min(0.90, midShY + shoulderSpan * 0.12), vis: shVis };
+      rawStore.midlineX = midShX;
+
+      const hdX = Math.max(0.02, midShX - halfWidth);
+      const hdW = Math.max(0.06, (midShX - gapHalf) - hdX);
+      const hiX = Math.min(0.92, midShX + gapHalf);
+      const hiW = Math.max(0.06, Math.min(0.98, midShX + halfWidth) - hiX);
+
+      rawStore.boxHD = { x: hdX, y: topY, w: hdW, h: thoraxHeightNorm };
+      rawStore.boxHI = { x: hiX, y: topY, w: hiW, h: thoraxHeightNorm };
+      rawStore.fullThoraxBox = { x: hdX, y: topY, w: Math.min(0.96, (hiX + hiW) - hdX), h: thoraxHeightNorm };
+
+      // Zona clavicular / cuello para compensar luminancia con ropa oscura
+      const neckW = Math.max(0.10, shoulderSpan * 0.42);
+      const neckH = Math.max(0.07, shoulderSpan * 0.26);
+      rawStore.neckRefBox = {
+        x: Math.max(0.02, midShX - neckW * 0.5),
+        y: Math.max(0.02, midShY - neckH * 0.85),
+        w: neckW,
+        h: neckH,
+      };
+
+      // Coordenadas ESPEJO (1 - x)
+      const mStore = AppState.poseAI.mirrorLandmarks;
+      const mRightShX = 1 - rRightX;
+      const mLeftShX = 1 - rLeftX;
+      const mMidX = 1 - midShX;
+      const mBottomY = Math.min(0.92, topY + thoraxHeightNorm);
+
+      mStore.nose = { x: 1 - rawStore.nose.x, y: rawStore.nose.y };
+      mStore.rightShoulder = { x: mRightShX, y: rRightY };
+      mStore.leftShoulder = { x: mLeftShX, y: rLeftY };
+      mStore.sternum = { x: mMidX, y: rawStore.sternum.y };
+      mStore.midlineBottom = { x: mMidX, y: mBottomY };
+      mStore.rightCostal = { x: Math.max(0.03, mMidX - halfWidth * 0.92), y: mBottomY };
+      mStore.leftCostal = { x: Math.min(0.97, mMidX + halfWidth * 0.92), y: mBottomY };
+
+      // Actualizar geometría del módulo abdominal
+      ABDOMEN_MODULE.updateGeometry(rawStore, mStore, leftHip, rightHip);
+
+      // Artefacto por movimiento postural brusco
+      if (AppState.poseAI.prevShoulderCenter) {
+        const dy = AppState.poseAI.prevShoulderCenter.y - midShY;
+        const dx = Math.abs(AppState.poseAI.prevShoulderCenter.x - midShX);
+        if (dx > 0.024 || Math.abs(dy) > 0.032) {
+          AppState.signal.isArtifact = true;
+        } else {
+          AppState.signal.isArtifact = false;
+          AppState.poseAI.lastPoseDispY = dy * 210;
+        }
+      }
+      AppState.poseAI.prevShoulderCenter = { x: midShX, y: midShY };
+    }
+
+    function updateBilateralNodeGrids() {
+      const { boxHD, boxHI } = AppState.poseAI.rawLandmarks;
+      for (let r = 0; r < 4; r++) {
+        const v = (r + 0.25) / 3.5;
+        for (let c = 0; c < 4; c++) {
+          const u = (c + 0.25) / 3.5;
+          const idx = r * 4 + c;
+
+          const pHD = AppState.nodesHD[idx];
+          pHD.rawNx = Math.max(0.02, Math.min(0.98, boxHD.x + boxHD.w * u));
+          pHD.rawNy = Math.max(0.02, Math.min(0.98, boxHD.y + boxHD.h * v));
+          pHD.mirrorNx = 1 - pHD.rawNx;
+          pHD.mirrorNy = pHD.rawNy;
+
+          const pHI = AppState.nodesHI[idx];
+          pHI.rawNx = Math.max(0.02, Math.min(0.98, boxHI.x + boxHI.w * u));
+          pHI.rawNy = Math.max(0.02, Math.min(0.98, boxHI.y + boxHI.h * v));
+          pHI.mirrorNx = 1 - pHI.rawNx;
+          pHI.mirrorNy = pHI.rawNy;
+        }
+      }
+    }
+
+    function showToast(message, type = 'info') {
+      const banner = document.getElementById('toastBanner');
+      const content = document.getElementById('toastContent');
+      const styles = {
+        info: 'bg-cyan-500/10 border-cyan-500/40 text-cyan-200',
+        success: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200',
+        warn: 'bg-amber-500/15 border-amber-500/40 text-amber-200',
+        error: 'bg-red-500/15 border-red-500/40 text-red-200',
+      };
+      content.className = `rounded-xl px-3.5 py-2 text-xs border flex items-center justify-between gap-3 ${styles[type] || styles.info}`;
+      content.innerHTML = `
+        <span>${message}</span>
+        <button type="button" onclick="document.getElementById('toastBanner').classList.add('hidden')" class="text-xs opacity-75 hover:opacity-100 font-mono px-1.5">✕</button>
+      `;
+      banner.classList.remove('hidden');
+    }
+
+    /**
+     * Gestión de Stepper y Transición de Fases (1 -> 2A -> 2B -> 3)
+     */
+    function updateStepperBadges(stage) {
+      // stage: '1' | '2A' | '2B' | '3'
+      const order = ['1', '2A', '2B', '3'];
+      const activeIdx = order.indexOf(stage);
+
+      order.forEach((key, idx) => {
+        const badge = document.getElementById(`stepBadge${key}`);
+        const circle = badge.querySelector('span');
+        if (idx < activeIdx) {
+          badge.className = 'flex items-center gap-1.5 px-2 py-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-[11px] font-medium transition-all';
+          circle.className = 'w-4 h-4 rounded-full bg-emerald-500 text-slate-950 font-bold text-[10px] flex items-center justify-center';
+          circle.textContent = '✓';
+        } else if (idx === activeIdx) {
+          const is2A = key === '2A';
+          badge.className = is2A
+            ? 'flex items-center gap-1.5 px-2 py-1 rounded-lg border border-amber-500/60 bg-amber-500/15 text-amber-300 text-[11px] font-medium transition-all'
+            : 'flex items-center gap-1.5 px-2 py-1 rounded-lg border border-cyan-500/50 bg-cyan-500/15 text-cyan-300 text-[11px] font-medium transition-all';
+          circle.className = is2A
+            ? 'w-4 h-4 rounded-full bg-amber-400 text-slate-950 font-bold text-[10px] flex items-center justify-center'
+            : 'w-4 h-4 rounded-full bg-cyan-500 text-slate-950 font-bold text-[10px] flex items-center justify-center';
+          circle.textContent = key;
+        } else {
+          badge.className = 'flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-800 bg-slate-900/70 text-slate-500 text-[11px] font-medium transition-all';
+          circle.className = 'w-4 h-4 rounded-full bg-slate-800 text-slate-400 font-bold text-[10px] flex items-center justify-center';
+          circle.textContent = key;
+        }
+      });
+
+      document.getElementById('stepLine1').className = `w-3 h-[2px] ${activeIdx >= 1 ? 'bg-emerald-500/60' : 'bg-slate-800'}`;
+      document.getElementById('stepLine2').className = `w-3 h-[2px] ${activeIdx >= 2 ? 'bg-emerald-500/60' : 'bg-slate-800'}`;
+      document.getElementById('stepLine3').className = `w-3 h-[2px] ${activeIdx >= 3 ? 'bg-emerald-500/60' : 'bg-slate-800'}`;
+    }
+
+    function setPhase(newPhase) {
+      AppState.phase = newPhase;
+      document.getElementById('phase1Section').classList.toggle('hidden', newPhase !== 1);
+      document.getElementById('phase2Section').classList.toggle('hidden', newPhase !== 2);
+      document.getElementById('phase3Section').classList.toggle('hidden', newPhase !== 3);
+
+      if (newPhase === 1) {
+        updateStepperBadges('1');
+      } else if (newPhase === 2) {
+        startBasal3sCalibration();
+        resizeCanvases();
+      } else if (newPhase === 3) {
+        updateStepperBadges('3');
+        buildClinicalReport();
+        renderPhase3Report();
+      }
+    }
+
+    /**
+     * =======================================================================
+     * FASE 2A: INICIO Y EJECUCIÓN DE CALIBRACIÓN BASAL DE 3 SEGUNDOS
+     * ("BOTA TODO EL AIRE y quédate quieto para fijar tu punto cero basal")
+     * =======================================================================
+     */
+    function startBasal3sCalibration() {
+      updateStepperBadges('2A');
+
+      // Reiniciar estado de calibración 3s
+      const cal = AppState.basalCalib3s;
+      cal.active = true;
+      cal.completed = false;
+      cal.elapsed = 0;
+      cal.minGlobal = Infinity;
+      cal.minHD = Infinity;
+      cal.minHI = Infinity;
+      cal.minABD = Infinity;
+      cal.endSamplesGlobal = [];
+      cal.endSamplesHD = [];
+      cal.endSamplesHI = [];
+      cal.endSamplesABD = [];
+
+      // Reiniciar señales y ciclos
+      const sig = AppState.signal;
+      sig.agcGain = 1.0;
+      sig.rawDispHD = 0;
+      sig.rawDispHI = 0;
+      sig.zeroBasalHD = 0;
+      sig.zeroBasalHI = 0;
+      sig.zeroBasalGlobal = 0;
+      sig.filteredHD = 0;
+      sig.filteredHI = 0;
+      sig.filteredThorax = 0;
+      sig.filteredGlobal = 0;
+      sig.prevFilteredGlobal = 0;
+      sig.xHistory = [];
+      sig.derivativeV = 0;
+      sig.vHistory = [];
+      sig.waveformBuffer = [];
+      sig.isArtifact = false;
+      sig.airTrappingDetected = false;
+      sig.airTrappingOffsetPct = 0;
+
+      ABDOMEN_MODULE.resetSignal();
+
+      const rs = AppState.respState;
+      rs.currentPhase = 'PAUSA';
+      rs.phaseDuration = 0;
+      rs.currentCycle = {
+        ti: 0, te: 0, pause: 0,
+        hasInspired: false, hasExpired: false,
+        minGlobal: 0, maxGlobal: 0, endValleyGlobal: 0,
+        minHD: 0, maxHD: 0, minHI: 0, maxHI: 0, minABD: 0, maxABD: 0,
+      };
+      rs.completedCycles = [];
+
+      updateCycleProgressUI();
+      updatePhaseCardUI('PAUSA', 0);
+      document.getElementById('btnFinishEarly').disabled = true;
+
+      // Mostrar overlay de cuenta regresiva 3s
+      document.getElementById('basalCountdownOverlay').classList.remove('hidden');
+      document.getElementById('basalCountdownNumber').textContent = '3';
+      document.getElementById('basalCountdownBar').style.width = '0%';
+      document.getElementById('stabilizationTag').textContent = 'Calibrando Cero (3.0s)...';
+      document.getElementById('stabilizationTag').className = 'px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[11px]';
+    }
+
+    function stepBasal3sCalibration(dt) {
+      const cal = AppState.basalCalib3s;
+      if (!cal.active) return;
+
+      cal.elapsed += dt;
+      const remaining = Math.max(0, cal.duration - cal.elapsed);
+      const pct = Math.min(100, (cal.elapsed / cal.duration) * 100);
+
+      document.getElementById('basalCountdownNumber').textContent = String(Math.max(1, Math.ceil(remaining)));
+      document.getElementById('basalCountdownBar').style.width = `${pct}%`;
+
+      const curHD = AppState.signal.rawDispHD;
+      const curHI = AppState.signal.rawDispHI;
+      const curGlobal = (curHD + curHI) * 0.5;
+      const curABD = ABDOMEN_MODULE.rawDisp;
+
+      // Registrar mínimos a partir de 0.35s (para evitar ruido del clic inicial)
+      if (cal.elapsed >= 0.35) {
+        if (curGlobal < cal.minGlobal) cal.minGlobal = curGlobal;
+        if (curHD < cal.minHD) cal.minHD = curHD;
+        if (curHI < cal.minHI) cal.minHI = curHI;
+        if (curABD < cal.minABD) cal.minABD = curABD;
+      }
+
+      // Muestrear últimos 0.6s (cuando el paciente sostiene la espiración máxima al final)
+      if (cal.elapsed >= 2.4) {
+        cal.endSamplesGlobal.push(curGlobal);
+        cal.endSamplesHD.push(curHD);
+        cal.endSamplesHI.push(curHI);
+        cal.endSamplesABD.push(curABD);
+      }
+
+      // Al completar los 3 segundos exactos, fijar el PUNTO CERO BASAL (x_basal = 0)
+      if (cal.elapsed >= cal.duration) {
+        const avgEnd = (arr, fallback) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : fallback;
+
+        const endG = avgEnd(cal.endSamplesGlobal, curGlobal);
+        const endHD = avgEnd(cal.endSamplesHD, curHD);
+        const endHI = avgEnd(cal.endSamplesHI, curHI);
+        const endABD = avgEnd(cal.endSamplesABD, curABD);
+
+        // Combinar el mínimo alcanzado con la meseta final de espiración máxima
+        AppState.signal.zeroBasalGlobal = isFinite(cal.minGlobal) ? Math.min(cal.minGlobal, endG) : endG;
+        AppState.signal.zeroBasalHD = isFinite(cal.minHD) ? Math.min(cal.minHD, endHD) : endHD;
+        AppState.signal.zeroBasalHI = isFinite(cal.minHI) ? Math.min(cal.minHI, endHI) : endHI;
+        ABDOMEN_MODULE.zeroBasal = isFinite(cal.minABD) ? Math.min(cal.minABD, endABD) : endABD;
+
+        cal.active = false;
+        cal.completed = true;
+
+        document.getElementById('basalCountdownOverlay').classList.add('hidden');
+        document.getElementById('stabilizationTag').textContent = '● Cero Basal Fijado · 5 Ciclos';
+        document.getElementById('stabilizationTag').className = 'px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[11px]';
+        updateStepperBadges('2B');
+        showToast('Punto cero basal calibrado (x_basal = 0). Ahora inhala y respira con naturalidad durante 5 ciclos.', 'success');
+      }
+    }
+
+    /**
+     * Activa Webcam Real
+     */
+    async function startWebcam() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('getUserMedia no disponible');
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+          audio: false,
+        });
+        AppState.stream = stream;
+        DOM.video.srcObject = stream;
+        await DOM.video.play();
+
+        AppState.mode = 'webcam';
+        prevGrayBuffer = null;
+        AppState.gatekeeper.stabilitySec = 0;
+        DOM.cameraStartOverlay.classList.add('hidden');
+        DOM.cameraSourceBadge.textContent = '● Cámara Web Activa';
+        DOM.cameraSourceBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+        DOM.btnForceStartPhase2.classList.remove('hidden');
+
+        startLoop();
+      } catch (err) {
+        showToast('No se detectó cámara web. Activando Modo Simulación Demo con calibración basal de 3s.', 'warn');
+        startDemoMode();
+      }
+    }
+
+    /**
+     * Activa Modo Simulación Demo
+     */
+    function startDemoMode() {
+      if (AppState.stream) {
+        AppState.stream.getTracks().forEach((t) => t.stop());
+        AppState.stream = null;
+      }
+      AppState.mode = 'demo';
+      AppState.gatekeeper.stabilitySec = 0;
+      DOM.cameraStartOverlay.classList.add('hidden');
+      DOM.cameraSourceBadge.textContent = '● Simulación Demo Activa';
+      DOM.cameraSourceBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30';
+      DOM.btnForceStartPhase2.classList.remove('hidden');
+
+      startLoop();
+    }
+
+    function resizeCanvases() {
+      [DOM.calibCanvas, DOM.liveCanvas, DOM.dispCanvas, DOM.derivCanvas, DOM.summaryCanvas].forEach((cvs) => {
+        if (!cvs) return;
+        const rect = cvs.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          cvs.width = Math.round(rect.width * dpr);
+          cvs.height = Math.round(rect.height * dpr);
+        }
+      });
+    }
+
+    /**
+     * BUCLE PRINCIPAL EN TIEMPO REAL
+     */
+    function startLoop() {
+      if (AppState.animFrameId) cancelAnimationFrame(AppState.animFrameId);
+      resizeCanvases();
+      AppState.lastFrameTime = performance.now();
+
+      function tick(now) {
+        const dt = Math.min((now - AppState.lastFrameTime) / 1000, 0.1);
+        AppState.lastFrameTime = now;
+
+        if (AppState.phase === 1 || AppState.phase === 2) {
+          processVisionMultizone(now, dt);
+        }
+
+        if (AppState.phase === 1) {
+          updateGatekeeperUI();
+          renderCalibrationCanvas();
+        } else if (AppState.phase === 2) {
+          if (AppState.basalCalib3s.active) {
+            stepBasal3sCalibration(dt);
+          } else {
+            processSignalFromZeroBasal(now, dt);
+          }
+          renderLiveTrackingCanvas();
+          renderOscilloscopes();
+        }
+
+        AppState.animFrameId = requestAnimationFrame(tick);
+      }
+
+      AppState.animFrameId = requestAnimationFrame(tick);
+    }
+
+    /**
+     * Cálculo de Luminancia Rec. 709 con sincronización nativa del canvas
+     */
+    function computeRegionLumaRec709(ctx, vw, vh, normBox) {
+      const rx = Math.max(0, Math.min(vw - 24, Math.floor(normBox.x * vw)));
+      const ry = Math.max(0, Math.min(vh - 24, Math.floor(normBox.y * vh)));
+      const rw = Math.max(24, Math.min(vw - rx, Math.floor(normBox.w * vw)));
+      const rh = Math.max(24, Math.min(vh - ry, Math.floor(normBox.h * vh)));
+
+      const imgData = ctx.getImageData(rx, ry, rw, rh).data;
+      let sumLuma = 0;
+      let count = 0;
+      for (let y = 0; y < rh; y += 2) {
+        const rowOff = y * rw * 4;
+        for (let x = 0; x < rw; x += 2) {
+          const i = rowOff + x * 4;
+          sumLuma += 0.2126 * imgData[i] + 0.7152 * imgData[i + 1] + 0.0722 * imgData[i + 2];
+          count++;
+        }
+      }
+      return count > 0 ? sumLuma / count : 0;
+    }
+
+    /**
+     * Flujo Óptico Sub-Píxel Lucas-Kanade sobre 16 nodos de un compartimento
+     */
+    function trackNodeGroupSubpixel(nodes, gray, gw, gh, hasPrev, isDetected, lumaOk) {
+      const flows = [];
+      let diffSum = 0;
+
+      nodes.forEach((pt) => {
+        const px = Math.round(pt.rawNx * gw);
+        const py = Math.round(pt.rawNy * gh);
+        let gradY2 = 0;
+        let iyIt = 0;
+        let absIt = 0;
+        let count = 0;
+
+        for (let dy = -3; dy <= 3; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            const sx = px + dx;
+            const sy = py + dy;
+            if (sx <= 1 || sx >= gw - 2 || sy <= 1 || sy >= gh - 2) continue;
+
+            const idx = sy * gw + sx;
+            const iy = (gray[idx + gw] - gray[idx - gw]) * 0.5;
+            gradY2 += iy * iy;
+            if (hasPrev) {
+              const it = gray[idx] - prevGrayBuffer[idx];
+              iyIt += iy * it;
+              absIt += Math.abs(it);
+            }
+            count++;
+          }
+        }
+
+        pt.active = isDetected && lumaOk;
+        if (hasPrev && count > 0) {
+          const vy = -iyIt / (gradY2 + 16);
+          const clampedVy = Math.max(-1.8, Math.min(1.8, vy));
+          flows.push(clampedVy);
+          diffSum += absIt / count;
+          pt.offsetY = pt.offsetY * 0.80 + clampedVy * 2.5;
+        }
+      });
+
+      let medianVy = 0;
+      if (flows.length > 0) {
+        flows.sort((a, b) => a - b);
+        const s = Math.floor(flows.length * 0.25);
+        const e = Math.ceil(flows.length * 0.75);
+        let sum = 0;
+        for (let k = s; k < e; k++) sum += flows[k];
+        medianVy = sum / Math.max(1, e - s);
+      }
+
+      return { medianVy, avgDiff: diffSum / Math.max(1, nodes.length) };
+    }
+
+    function processVisionMultizone(now, dt) {
+      if (AppState.mode === 'webcam' && DOM.video.readyState >= 2) {
+        // 1. Sincronizar dimensiones nativas del video ANTES de drawImage
+        const vw = DOM.video.videoWidth || 640;
+        const vh = DOM.video.videoHeight || 480;
+        if (analysisCanvas.width !== vw || analysisCanvas.height !== vh) {
+          analysisCanvas.width = vw;
+          analysisCanvas.height = vh;
+        }
+        analysisCtx.drawImage(DOM.video, 0, 0, vw, vh);
+
+        // 2. Enviar frame a MediaPipe Pose
+        if (AppState.poseAI.instance && AppState.poseAI.ready && !AppState.poseAI.busy && (now - AppState.poseAI.lastSendTime) > 48) {
+          AppState.poseAI.busy = true;
+          AppState.poseAI.lastSendTime = now;
+          AppState.poseAI.instance.send({ image: DOM.video }).catch(() => {
+            AppState.poseAI.busy = false;
+          });
+        }
+
+        // 3. Fallback anatómico si CDN no responde
+        if (AppState.poseAI.failed) {
+          AppState.poseAI.detected = true;
+          AppState.poseAI.confidence = 0.88;
+          AppState.poseAI.frontalAligned = true;
+          const rawStore = AppState.poseAI.rawLandmarks;
+          rawStore.nose = { x: 0.50, y: 0.18, vis: 0.88 };
+          rawStore.leftShoulder = { x: 0.67, y: 0.34, z: 0, vis: 0.88 };
+          rawStore.rightShoulder = { x: 0.33, y: 0.34, z: 0, vis: 0.88 };
+          rawStore.sternum = { x: 0.50, y: 0.38, vis: 0.88 };
+          rawStore.midlineX = 0.50;
+          rawStore.boxHD = { x: 0.32, y: 0.35, w: 0.17, h: 0.25 };
+          rawStore.boxHI = { x: 0.51, y: 0.35, w: 0.17, h: 0.25 };
+          rawStore.fullThoraxBox = { x: 0.32, y: 0.35, w: 0.36, h: 0.25 };
+          rawStore.neckRefBox = { x: 0.42, y: 0.24, w: 0.16, h: 0.09 };
+
+          const mStore = AppState.poseAI.mirrorLandmarks;
+          mStore.nose = { x: 0.50, y: 0.18 };
+          mStore.rightShoulder = { x: 0.33, y: 0.34 };
+          mStore.leftShoulder = { x: 0.67, y: 0.34 };
+          mStore.sternum = { x: 0.50, y: 0.38 };
+          mStore.midlineBottom = { x: 0.50, y: 0.60 };
+          mStore.rightCostal = { x: 0.35, y: 0.60 };
+          mStore.leftCostal = { x: 0.65, y: 0.60 };
+          ABDOMEN_MODULE.updateGeometry(rawStore, mStore, null, null);
+        }
+
+        updateBilateralNodeGrids();
+
+        // 4. Luminancia Rec. 709 con compensación clavicular/cuello
+        const rawStore = AppState.poseAI.rawLandmarks;
+        const thoraxLuma = computeRegionLumaRec709(analysisCtx, vw, vh, rawStore.fullThoraxBox);
+        const neckRefLuma = computeRegionLumaRec709(analysisCtx, vw, vh, rawStore.neckRefBox);
+        const effectiveLuma = Math.max(thoraxLuma, neckRefLuma * 0.88);
+
+        AppState.gatekeeper.thoraxLuma = thoraxLuma;
+        AppState.gatekeeper.neckRefLuma = neckRefLuma;
+        AppState.gatekeeper.luminance = effectiveLuma;
+        AppState.gatekeeper.lightOk = effectiveLuma >= 32 && effectiveLuma <= 248;
+
+        // 5. Flujo Óptico Sub-Píxel independiente: HD (16) + HI (16) + Abdomen (16 si activo)
+        const gw = 160;
+        const gh = 120;
+        const fullFrame = analysisCtx.getImageData(0, 0, vw, vh).data;
+        const gray = new Float32Array(gw * gh);
+        for (let gy = 0; gy < gh; gy++) {
+          const sy = Math.min(vh - 1, Math.floor((gy / gh) * vh));
+          for (let gx = 0; gx < gw; gx++) {
+            const sx = Math.min(vw - 1, Math.floor((gx / gw) * vw));
+            const idx = (sy * vw + sx) * 4;
+            gray[gy * gw + gx] = 0.2126 * fullFrame[idx] + 0.7152 * fullFrame[idx + 1] + 0.0722 * fullFrame[idx + 2];
+          }
+        }
+
+        const hasPrev = prevGrayBuffer && prevGrayW === gw && prevGrayH === gh;
+        const resHD = trackNodeGroupSubpixel(AppState.nodesHD, gray, gw, gh, hasPrev, AppState.poseAI.detected, effectiveLuma >= 20);
+        const resHI = trackNodeGroupSubpixel(AppState.nodesHI, gray, gw, gh, hasPrev, AppState.poseAI.detected, effectiveLuma >= 20);
+        const resABD = ABDOMEN_MODULE.enabled
+          ? trackNodeGroupSubpixel(ABDOMEN_MODULE.nodes, gray, gw, gh, hasPrev, AppState.poseAI.detected, effectiveLuma >= 20)
+          : { medianVy: 0, avgDiff: 0 };
+
+        // 6. Gatekeeper Fase 1
+        AppState.gatekeeper.anatomyOk = AppState.poseAI.detected;
+        AppState.gatekeeper.anatomyScore = AppState.poseAI.detected ? Math.round(AppState.poseAI.confidence * 100) : 0;
+        AppState.gatekeeper.alignmentOk = AppState.poseAI.detected && AppState.poseAI.frontalAligned;
+
+        const avgMacroDiff = (resHD.avgDiff + resHI.avgDiff) * 0.5;
+        const abdFrameOk = !ABDOMEN_MODULE.enabled || ABDOMEN_MODULE.inFrame;
+        const isSteady = AppState.poseAI.detected && abdFrameOk && avgMacroDiff < 7.5 && !AppState.signal.isArtifact;
+
+        if (isSteady) {
+          AppState.gatekeeper.stabilitySec = Math.min(2.0, AppState.gatekeeper.stabilitySec + dt);
+        } else {
+          AppState.gatekeeper.stabilitySec = Math.max(0, AppState.gatekeeper.stabilitySec - dt * 1.6);
+        }
+        AppState.gatekeeper.stabilityOk = AppState.gatekeeper.stabilitySec >= 2.0 && abdFrameOk;
+
+        // 7. Integrar desplazamientos absolutos (la referencia cero la fija la calibración 3s)
+        if (hasPrev && AppState.poseAI.detected) {
+          const poseDelta = AppState.poseAI.lastPoseDispY * 0.25;
+          AppState.signal.rawDispHD += (-resHD.medianVy * 16 + poseDelta);
+          AppState.signal.rawDispHI += (-resHI.medianVy * 16 + poseDelta);
+          if (ABDOMEN_MODULE.enabled) {
+            ABDOMEN_MODULE.rawDisp += (-resABD.medianVy * 17 + poseDelta * 0.6);
+          }
+
+          // Amortiguación muy suave (0.997) para preservar el cero basal calibrado durante los 5 ciclos
+          AppState.signal.rawDispHD *= 0.997;
+          AppState.signal.rawDispHI *= 0.997;
+          ABDOMEN_MODULE.rawDisp *= 0.997;
+        }
+
+        prevGrayBuffer = gray;
+        prevGrayW = gw;
+        prevGrayH = gh;
+
+      } else if (AppState.mode === 'demo') {
+        // MODO SIMULACIÓN DEMO CON 4 PERFILES CLÍNICOS
+        const t = now / 1000;
+        const preset = document.getElementById('globalDemoPresetSelect').value || 'normal';
+        const sim = computeDemoMultizoneWaves(t, preset, AppState.basalCalib3s.active);
+
+        AppState.signal.rawDispHD = sim.xHD;
+        AppState.signal.rawDispHI = sim.xHI;
+        ABDOMEN_MODULE.rawDisp = sim.xABD;
+        AppState.signal.isArtifact = false;
+
+        const liftHD = sim.xHD * 0.00075;
+        const liftHI = sim.xHI * 0.00075;
+        const avgLift = (liftHD + liftHI) * 0.5;
+
+        AppState.poseAI.detected = true;
+        AppState.poseAI.confidence = 0.98;
+        AppState.poseAI.frontalAligned = true;
+        AppState.poseAI.rotationWarning = '';
+
+        const rawStore = AppState.poseAI.rawLandmarks;
+        rawStore.midlineX = 0.50;
+        rawStore.boxHD = { x: 0.33, y: 0.34 - liftHD, w: 0.16, h: 0.24 };
+        rawStore.boxHI = { x: 0.51, y: 0.34 - liftHI, w: 0.16, h: 0.24 };
+        rawStore.fullThoraxBox = { x: 0.33, y: 0.34 - avgLift, w: 0.34, h: 0.24 };
+
+        const mStore = AppState.poseAI.mirrorLandmarks;
+        mStore.nose = { x: 0.50, y: 0.17 - avgLift * 0.2 };
+        mStore.rightShoulder = { x: 0.32, y: 0.33 - liftHD * 1.1 };
+        mStore.leftShoulder = { x: 0.68, y: 0.33 - liftHI * 1.1 };
+        mStore.sternum = { x: 0.50, y: 0.37 - avgLift * 1.1 };
+        mStore.midlineBottom = { x: 0.50, y: 0.58 - avgLift * 0.4 };
+        mStore.rightCostal = { x: 0.35, y: 0.58 - liftHD * 0.5 };
+        mStore.leftCostal = { x: 0.65, y: 0.58 - liftHI * 0.5 };
+
+        ABDOMEN_MODULE.updateGeometry(rawStore, mStore, null, null);
+        ABDOMEN_MODULE.inFrame = true;
+        updateBilateralNodeGrids();
+
+        AppState.nodesHD.forEach((pt, idx) => {
+          pt.active = true;
+          pt.offsetY = -sim.xHD * 0.30 * (1 - Math.floor(idx / 4) * 0.12);
+        });
+        AppState.nodesHI.forEach((pt, idx) => {
+          pt.active = true;
+          pt.offsetY = -sim.xHI * 0.30 * (1 - Math.floor(idx / 4) * 0.12);
+        });
+        ABDOMEN_MODULE.nodes.forEach((pt, idx) => {
+          pt.active = true;
+          pt.offsetY = -sim.xABD * 0.32 * (1 - Math.floor(idx / 4) * 0.10);
+        });
+
+        const simLuma = Math.round(146 + Math.sin(t * 0.7) * 3);
+        AppState.gatekeeper.luminance = simLuma;
+        AppState.gatekeeper.lightOk = true;
+        AppState.gatekeeper.anatomyOk = true;
+        AppState.gatekeeper.anatomyScore = 98;
+        AppState.gatekeeper.alignmentOk = true;
+        AppState.gatekeeper.stabilitySec = Math.min(2.0, AppState.gatekeeper.stabilitySec + dt);
+        AppState.gatekeeper.stabilityOk = AppState.gatekeeper.stabilitySec >= 2.0;
+      }
+    }
+
+    function computeDemoMultizoneWaves(t, preset, isCalibrating3s) {
+      // Durante los 3s de calibración basal en Demo, simula una espiración completa hacia 0
+      if (isCalibrating3s) {
+        const drop = Math.max(0, 6 * (1 - Math.min(1, AppState.basalCalib3s.elapsed / 2.2)));
+        return { xHD: drop, xHI: drop, xABD: drop };
+      }
+
+      let ti = 1.35, te = 2.70, tp = 0.35;
+      let ampHD = 14.0, ampHI = 14.0, ampABD = 17.5;
+      let airTrapDrift = 0;
+
+      if (preset === 'obstructive') {
+        ti = 1.15; te = 4.02; tp = 0.25;
+        ampHD = 16.5; ampHI = 16.0; ampABD = 12.5;
+        // Simula leve atrapamiento aéreo progresivo sobre el cero basal
+        airTrapDrift = Math.min(4.2, (t % 28) * 0.18);
+      } else if (preset === 'costal_anxiety') {
+        // Patrón costal superior / ansiedad: alta excursión torácica, mínima excursión abdominal, ritmo rápido
+        ti = 1.05; te = 1.25; tp = 0.15;
+        ampHD = 18.0; ampHI = 18.2; ampABD = 5.0;
+      } else if (preset === 'asymmetry_hd') {
+        // Asimetría Hemitorácica Der < Izq (-28%)
+        ti = 1.30; te = 2.60; tp = 0.30;
+        ampHD = 10.2; ampHI = 18.4; ampABD = 16.5;
+      }
+
+      const period = ti + te + tp;
+      const pt = t % period;
+      let env = 0;
+      if (pt < ti) {
+        env = 0.5 * (1 - Math.cos(Math.PI * (pt / ti)));
+      } else if (pt < ti + te) {
+        const u = (pt - ti) / te;
+        env = preset === 'obstructive'
+          ? Math.pow(1 - u, 1.85)
+          : 0.5 * (1 + Math.cos(Math.PI * u));
+      }
+
+      return {
+        xHD: airTrapDrift + ampHD * env,
+        xHI: airTrapDrift + ampHI * env,
+        xABD: airTrapDrift * 0.7 + ampABD * env,
+      };
+    }
+
+    /**
+     * ACTUALIZA SEMÁFORO DE FASE 1
+     */
+    function updateGatekeeperUI() {
+      const gk = AppState.gatekeeper;
+      if (AppState.mode === 'idle') return;
+
+      // 1. Iluminación Rec. 709
+      const lumaVal = Math.round(gk.luminance);
+      const lumaPct = Math.round((lumaVal / 255) * 100);
+      document.getElementById('barLight').style.width = `${Math.min(100, Math.max(0, lumaPct))}%`;
+
+      if (lumaVal < 32) {
+        document.getElementById('dotLight').className = 'w-2.5 h-2.5 rounded-full bg-red-400';
+        document.getElementById('badgeLight').textContent = `${lumaVal}/255 • Baja`;
+        document.getElementById('badgeLight').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-red-500/20 text-red-300';
+        document.getElementById('barLight').className = 'h-full bg-red-500 rounded-full transition-all';
+        document.getElementById('msgLight').textContent = 'Luminancia insuficiente (< 32). Aumenta la luz frontal o usa "Forzar inicio manual".';
+      } else if (lumaVal > 248) {
+        document.getElementById('dotLight').className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+        document.getElementById('badgeLight').textContent = `${lumaVal}/255 • Saturada`;
+        document.getElementById('badgeLight').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300';
+        document.getElementById('barLight').className = 'h-full bg-amber-500 rounded-full transition-all';
+        document.getElementById('msgLight').textContent = 'Exceso de brillo (> 248). Evita reflejos directos.';
+      } else {
+        document.getElementById('dotLight').className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+        document.getElementById('badgeLight').textContent = `${lumaVal}/255 • Óptima`;
+        document.getElementById('badgeLight').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300';
+        document.getElementById('barLight').className = 'h-full bg-emerald-500 rounded-full transition-all';
+        document.getElementById('msgLight').textContent = 'Iluminación Rec. 709 verificada en tórax y referencia clavicular.';
+      }
+
+      // 2. Detección Anatómica
+      document.getElementById('barAnatomy').style.width = `${gk.anatomyScore}%`;
+      if (gk.anatomyOk) {
+        document.getElementById('dotAnatomy').className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+        document.getElementById('badgeAnatomy').textContent = ABDOMEN_MODULE.enabled ? `HD+HI+ABD (${gk.anatomyScore}%)` : `HD+HI (${gk.anatomyScore}%)`;
+        document.getElementById('badgeAnatomy').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300';
+        document.getElementById('barAnatomy').className = 'h-full bg-emerald-500 rounded-full transition-all';
+        document.getElementById('msgAnatomy').textContent = ABDOMEN_MODULE.enabled
+          ? 'Hombros, esternón, línea media y 48 nodos (HD + HI + Abdomen) anclados.'
+          : 'Hombros, esternón, línea media y 32 nodos hemitorácicos anclados.';
+      } else {
+        document.getElementById('dotAnatomy').className = 'w-2.5 h-2.5 rounded-full bg-red-400';
+        document.getElementById('badgeAnatomy').textContent = 'Buscando...';
+        document.getElementById('badgeAnatomy').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-red-500/20 text-red-300';
+        document.getElementById('barAnatomy').className = 'h-full bg-red-500 rounded-full transition-all';
+        document.getElementById('msgAnatomy').textContent = 'Sitúate frente a la cámara mostrando ambos hombros y el torso.';
+      }
+
+      // 3. Alineación Frontal
+      if (gk.alignmentOk) {
+        document.getElementById('dotAlignment').className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+        document.getElementById('badgeAlignment').textContent = 'Frontal Óptima';
+        document.getElementById('badgeAlignment').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300';
+        document.getElementById('msgAlignment').textContent = 'Plano de hombros paralelo a cámara: sin sesgo de rotación.';
+      } else {
+        document.getElementById('dotAlignment').className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+        document.getElementById('badgeAlignment').textContent = 'Ajustar Ángulo';
+        document.getElementById('badgeAlignment').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300';
+        document.getElementById('msgAlignment').textContent = AppState.poseAI.rotationWarning || 'Alinea ambos hombros frente a la cámara.';
+      }
+
+      // 4. Estabilidad y Encuadre Abdominal
+      const stabPct = Math.round((gk.stabilitySec / 2.0) * 100);
+      document.getElementById('barStability').style.width = `${stabPct}%`;
+      if (ABDOMEN_MODULE.enabled && gk.anatomyOk && !ABDOMEN_MODULE.inFrame) {
+        document.getElementById('dotStability').className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+        document.getElementById('badgeStability').textContent = 'Abdomen Cortado';
+        document.getElementById('badgeStability').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300';
+        document.getElementById('msgStability').textContent = 'Aléjate 20 cm para encuadrar la zona umbilical o desactiva el Módulo Abdomen.';
+      } else if (gk.stabilityOk) {
+        document.getElementById('dotStability').className = 'w-2.5 h-2.5 rounded-full bg-emerald-400';
+        document.getElementById('badgeStability').textContent = 'Listo (2.0 s)';
+        document.getElementById('badgeStability').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300';
+        document.getElementById('barStability').className = 'h-full bg-emerald-500 rounded-full transition-all';
+        document.getElementById('msgStability').textContent = 'Estabilidad postural y encuadre verificados.';
+      } else {
+        document.getElementById('dotStability').className = 'w-2.5 h-2.5 rounded-full bg-cyan-400';
+        document.getElementById('badgeStability').textContent = `${gk.stabilitySec.toFixed(1)} / 2.0 s`;
+        document.getElementById('badgeStability').className = 'text-[11px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300';
+        document.getElementById('barStability').className = 'h-full bg-cyan-500 rounded-full transition-all';
+        document.getElementById('msgStability').textContent = 'Permanece quieto 2.0 segundos...';
+      }
+
+      const allReady = gk.lightOk && gk.anatomyOk && gk.alignmentOk && gk.stabilityOk;
+      DOM.btnStartPhase2.disabled = !allReady;
+      const lockIcon = document.getElementById('lockIconPhase2');
+
+      if (allReady) {
+        DOM.gatekeeperSummary.textContent = '✓ Todo validado. Presiona para iniciar la calibración basal de 3s.';
+        DOM.gatekeeperSummary.className = 'text-center text-xs text-emerald-400 font-medium';
+        lockIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />';
+      } else {
+        DOM.gatekeeperSummary.textContent = 'Completa los 4 indicadores en verde para continuar.';
+        DOM.gatekeeperSummary.className = 'text-center text-[11px] text-slate-400';
+        lockIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />';
+      }
+    }
+
+    /**
+     * =======================================================================
+     * RENDERIZADO ANATÓMICO MULTIZONA (HD + HI + ABDOMEN_MODULE)
+     * =======================================================================
+     */
+    function renderCalibrationCanvas() {
+      const cvs = DOM.calibCanvas;
+      const ctx = cvs.getContext('2d');
+      ctx.clearRect(0, 0, cvs.width, cvs.height);
+      drawVideoOrDemoBackground(ctx, cvs.width, cvs.height);
+      drawMultizoneOverlay(ctx, cvs.width, cvs.height, null, 0);
+    }
+
+    function renderLiveTrackingCanvas() {
+      const cvs = DOM.liveCanvas;
+      const ctx = cvs.getContext('2d');
+      ctx.clearRect(0, 0, cvs.width, cvs.height);
+      drawVideoOrDemoBackground(ctx, cvs.width, cvs.height);
+      const showPill = !AppState.basalCalib3s.active ? AppState.respState.currentPhase : null;
+      drawMultizoneOverlay(ctx, cvs.width, cvs.height, showPill, AppState.respState.phaseDuration);
+    }
+
+    function drawVideoOrDemoBackground(ctx, W, H) {
+      if (AppState.mode === 'webcam' && DOM.video.readyState >= 2) {
+        ctx.save();
+        ctx.translate(W, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(DOM.video, 0, 0, W, H);
+        ctx.restore();
+        ctx.fillStyle = 'rgba(11, 15, 25, 0.24)';
+        ctx.fillRect(0, 0, W, H);
+      } else {
+        const grad = ctx.createRadialGradient(W * 0.5, H * 0.5, W * 0.05, W * 0.5, H * 0.5, W * 0.68);
+        grad.addColorStop(0, '#1E293B');
+        grad.addColorStop(1, '#090D16');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+
+        const m = AppState.poseAI.mirrorLandmarks;
+        ctx.save();
+        ctx.fillStyle = 'rgba(51, 65, 85, 0.55)';
+        ctx.strokeStyle = 'rgba(100, 116, 139, 0.65)';
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+        ctx.arc(m.nose.x * W, m.nose.y * H, H * 0.085, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo((m.nose.x - 0.04) * W, H * 0.25);
+        ctx.lineTo(m.rightShoulder.x * W, m.rightShoulder.y * H);
+        ctx.lineTo((m.rightCostal.x - 0.02) * W, H * 0.94);
+        ctx.lineTo((m.leftCostal.x + 0.02) * W, H * 0.94);
+        ctx.lineTo(m.leftShoulder.x * W, m.leftShoulder.y * H);
+        ctx.lineTo((m.nose.x + 0.04) * W, H * 0.25);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    function drawMultizoneOverlay(ctx, W, H, activePhase, phaseDur) {
+      if (!AppState.poseAI.detected) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(W * 0.26, H * 0.25, W * 0.48, H * 0.62);
+        ctx.restore();
+        return;
+      }
+
+      const m = AppState.poseAI.mirrorLandmarks;
+      const rs = { x: m.rightShoulder.x * W, y: m.rightShoulder.y * H };
+      const ls = { x: m.leftShoulder.x * W, y: m.leftShoulder.y * H };
+      const st = { x: m.sternum.x * W, y: m.sternum.y * H };
+      const mb = { x: m.midlineBottom.x * W, y: m.midlineBottom.y * H };
+      const rc = { x: m.rightCostal.x * W, y: m.rightCostal.y * H };
+      const lc = { x: m.leftCostal.x * W, y: m.leftCostal.y * H };
+
+      // 1. Hemitórax Derecho (HD — Esmeralda #10B981)
+      ctx.save();
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.12)';
+      ctx.strokeStyle = 'rgba(16, 185, 129, 0.85)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(rs.x, rs.y);
+      ctx.lineTo(st.x - 3, st.y);
+      ctx.lineTo(mb.x - 3, mb.y);
+      ctx.lineTo(rc.x, rc.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // 2. Hemitórax Izquierdo (HI — Celeste #38BDF8)
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.12)';
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+      ctx.beginPath();
+      ctx.moveTo(st.x + 3, st.y);
+      ctx.lineTo(ls.x, ls.y);
+      ctx.lineTo(lc.x, lc.y);
+      ctx.lineTo(mb.x + 3, mb.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Línea Media Esternal
+      ctx.strokeStyle = '#F8FAFC';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(st.x, st.y - 8);
+      ctx.lineTo(mb.x, mb.y + 4);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Mallas de 16 nodos HD y 16 nodos HI
+      drawSubpixelMesh(ctx, W, H, AppState.nodesHD, '#10B981');
+      drawSubpixelMesh(ctx, W, H, AppState.nodesHI, '#38BDF8');
+
+      // Etiquetas compartimentos torácicos
+      drawPillLabel(ctx, (rs.x + st.x) * 0.5, mb.y - 12, 'HD (DER)', '#10B981');
+      drawPillLabel(ctx, (ls.x + st.x) * 0.5, mb.y - 12, 'HI (IZQ)', '#38BDF8');
+
+      // 3. Módulo Abdominal (si está activado)
+      ABDOMEN_MODULE.drawOverlay(ctx, W, H);
+
+      // 4. Marcadores Anatómicos Principales
+      drawAnatomicalMarker(ctx, rs.x, rs.y, '#10B981', 'HOMBRO DER', 'right');
+      drawAnatomicalMarker(ctx, ls.x, ls.y, '#38BDF8', 'HOMBRO IZQ', 'left');
+      drawAnatomicalMarker(ctx, st.x, st.y, '#F8FAFC', 'ESTERNÓN', 'top');
+
+      // 5. Píldora flotante de Fase Respiratoria en vivo (Fase 2B)
+      if (activePhase) {
+        let pillText = `⏸ PAUSA / APNEA · ${phaseDur.toFixed(1)}s`;
+        let pillBg = 'rgba(139, 92, 246, 0.94)';
+        if (activePhase === 'INSPIRACION') {
+          pillText = `▲ INSPIRACIÓN · ${phaseDur.toFixed(1)}s`;
+          pillBg = 'rgba(6, 182, 212, 0.95)';
+        } else if (activePhase === 'ESPIRACION') {
+          pillText = `▼ ESPIRACIÓN · ${phaseDur.toFixed(1)}s`;
+          pillBg = 'rgba(245, 158, 11, 0.95)';
+        }
+
+        ctx.save();
+        ctx.font = 'bold 11.5px "JetBrains Mono", monospace';
+        const tw = ctx.measureText(pillText).width;
+        const pw = tw + 16;
+        const ph = 23;
+        ctx.fillStyle = pillBg;
+        ctx.beginPath();
+        ctx.roundRect(10, 10, pw, ph, 7);
+        ctx.fill();
+
+        ctx.fillStyle = activePhase === 'PAUSA' ? '#FFFFFF' : '#090D16';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pillText, 18, 10 + ph / 2);
+        ctx.restore();
+      }
+    }
+
+    function drawSubpixelMesh(ctx, W, H, nodes, color) {
+      if (nodes.length !== 16) return;
+      ctx.save();
+      ctx.strokeStyle = `${color}45`;
+      ctx.lineWidth = 1;
+      for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+          const idx = r * 4 + c;
+          const p = nodes[idx];
+          const px = p.mirrorNx * W;
+          const py = p.mirrorNy * H + p.offsetY;
+          if (c < 3) {
+            const pr = nodes[idx + 1];
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(pr.mirrorNx * W, pr.mirrorNy * H + pr.offsetY);
+            ctx.stroke();
+          }
+          if (r < 3) {
+            const pd = nodes[idx + 4];
+            ctx.beginPath();
+            ctx.moveTo(px, py);
+            ctx.lineTo(pd.mirrorNx * W, pd.mirrorNy * H + pd.offsetY);
+            ctx.stroke();
+          }
+        }
+      }
+      nodes.forEach((p) => {
+        const px = p.mirrorNx * W;
+        const py = p.mirrorNy * H + p.offsetY;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.restore();
+    }
+
+    function drawAnatomicalMarker(ctx, x, y, color, label, align = 'top') {
+      ctx.save();
+      ctx.fillStyle = `${color}33`;
+      ctx.beginPath();
+      ctx.arc(x, y, 8.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#0B0F19';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+
+      if (label) {
+        let lx = x;
+        let ly = y - 14;
+        if (align === 'right') { lx = x - 6; ly = y - 14; }
+        else if (align === 'left') { lx = x + 6; ly = y - 14; }
+        drawPillLabel(ctx, lx, ly, label, color);
+      }
+      ctx.restore();
+    }
+
+    function drawPillLabel(ctx, cx, cy, text, accentColor) {
+      ctx.save();
+      ctx.font = 'bold 9px "JetBrains Mono", monospace';
+      const tw = ctx.measureText(text).width;
+      const pw = tw + 10;
+      const ph = 15;
+      const rx = Math.max(4, Math.min(ctx.canvas.width - pw - 4, cx - pw / 2));
+      const ry = Math.max(4, Math.min(ctx.canvas.height - ph - 4, cy - ph / 2));
+
+      ctx.fillStyle = 'rgba(11, 15, 25, 0.86)';
+      ctx.strokeStyle = `${accentColor}99`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(rx, ry, pw, ph, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#F8FAFC';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, rx + 5, ry + ph / 2);
+      ctx.restore();
+    }
+
+    /**
+     * =======================================================================
+     * FASE 2B: DETECCIÓN DE INSPIRACIÓN DESDE EL CERO BASAL CALIBRADO (x_basal=0),
+     * DERIVADA SAVITZKY-GOLAY 7-PT Y DETECCIÓN DE ATRAPAMIENTO AÉREO
+     * =======================================================================
+     */
+    function processSignalFromZeroBasal(now, dt) {
+      const sig = AppState.signal;
+
+      // 1. Desplazamiento relativo al PUNTO CERO BASAL calibrado en espiración máxima
+      const relHD = sig.rawDispHD - sig.zeroBasalHD;
+      const relHI = sig.rawDispHI - sig.zeroBasalHI;
+
+      // 2. AGC compartido para mantener escala legible preservando diferencias bilaterales
+      const peakMag = Math.max(Math.abs(relHD), Math.abs(relHI));
+      if (peakMag > 1.2) {
+        const desiredGain = Math.max(0.45, Math.min(2.6, 14.5 / (peakMag * 1.25)));
+        sig.agcGain = sig.agcGain * 0.988 + desiredGain * 0.012;
+      }
+
+      const effectiveScale = sig.userMultiplier * sig.agcGain;
+      sig.filteredHD = sig.filteredHD * 0.74 + (relHD * effectiveScale) * 0.26;
+      sig.filteredHI = sig.filteredHI * 0.74 + (relHI * effectiveScale) * 0.26;
+      sig.filteredThorax = (sig.filteredHD + sig.filteredHI) * 0.5;
+
+      // Procesar señal abdominal si el módulo está activo
+      ABDOMEN_MODULE.processSignal(effectiveScale, sig.waveformBuffer);
+
+      // Señal cinemática global fusionada (70% tórax + 30% abdomen si está activo)
+      sig.filteredGlobal = ABDOMEN_MODULE.enabled
+        ? (sig.filteredThorax * 0.70 + ABDOMEN_MODULE.filtered * 0.30)
+        : sig.filteredThorax;
+
+      sig.xHistory.push(sig.filteredGlobal);
+      if (sig.xHistory.length > 9) sig.xHistory.shift();
+
+      // 3. Derivada Temporal Savitzky-Golay de 7 puntos: v(t) = dx/dt
+      let rawDeriv = 0;
+      const h = sig.xHistory;
+      const safeDt = Math.max(dt, 0.016);
+      if (h.length >= 7) {
+        const n = h.length;
+        rawDeriv = (
+          -3 * h[n - 7]
+          -2 * h[n - 6]
+          -1 * h[n - 5]
+          + 0 * h[n - 4]
+          + 1 * h[n - 3]
+          + 2 * h[n - 2]
+          + 3 * h[n - 1]
+        ) / (28 * safeDt);
+      } else {
+        rawDeriv = (sig.filteredGlobal - sig.prevFilteredGlobal) / safeDt;
+      }
+      sig.prevFilteredGlobal = sig.filteredGlobal;
+
+      sig.derivativeV = sig.derivativeV * 0.64 + rawDeriv * 0.36;
+      sig.vHistory.push(Math.abs(sig.derivativeV));
+      if (sig.vHistory.length > 180) sig.vHistory.shift();
+
+      // 4. Detección Híbrida de Fase usando Cero Basal (x_basal = 0) + Derivada v(t)
+      // Ventaja: Al partir desde x_basal = 0 (espiración máxima), cualquier elevación
+      // clara por encima del cero basal + velocidad ascendente detecta INSPIRACIÓN al instante.
+      const sortedV = [...sig.vHistory].sort((a, b) => a - b);
+      const p85 = sortedV[Math.floor(sortedV.length * 0.85)] || 2.8;
+      const epsilon = Math.max(1.05, p85 * 0.20);
+
+      let detectedPhase = 'PAUSA';
+      if (sig.derivativeV > epsilon || (sig.filteredGlobal > 1.4 && sig.derivativeV > epsilon * 0.45)) {
+        detectedPhase = 'INSPIRACION';
+      } else if (sig.derivativeV < -epsilon) {
+        detectedPhase = 'ESPIRACION';
+      }
+
+      document.getElementById('artifactAlertBadge').classList.toggle('hidden', !sig.isArtifact);
+
+      // 5. Actualizar máquina de estados de ciclos
+      updateRespiratoryStateMachine(detectedPhase, dt, sig.isArtifact);
+      updatePhaseCardUI(AppState.respState.currentPhase, AppState.respState.phaseDuration);
+
+      // 6. Almacenar en buffer de osciloscopios
+      sig.waveformBuffer.push({
+        x: sig.filteredGlobal,
+        xThorax: sig.filteredThorax,
+        xHD: sig.filteredHD,
+        xHI: sig.filteredHI,
+        xABD: ABDOMEN_MODULE.filtered,
+        v: sig.derivativeV,
+        epsilon,
+        phase: AppState.respState.currentPhase,
+      });
+      if (sig.waveformBuffer.length > sig.maxBufferPoints) sig.waveformBuffer.shift();
+
+      // 7. Actualizar métricas en vivo de Hemitórax, Abdomen y Atrapamiento Aéreo
+      updateLiveCompartmentMetrics();
+      updateLiveTelemetryUI();
+    }
+
+    function updateRespiratoryStateMachine(detectedPhase, dt, isArtifact) {
+      const rs = AppState.respState;
+      const cyc = rs.currentCycle;
+      const sig = AppState.signal;
+
+      if (isArtifact) {
+        rs.currentCycle = {
+          ti: 0, te: 0, pause: 0, hasInspired: false, hasExpired: false,
+          minGlobal: sig.filteredGlobal, maxGlobal: sig.filteredGlobal, endValleyGlobal: sig.filteredGlobal,
+          minHD: sig.filteredHD, maxHD: sig.filteredHD, minHI: sig.filteredHI, maxHI: sig.filteredHI,
+          minABD: ABDOMEN_MODULE.filtered, maxABD: ABDOMEN_MODULE.filtered,
+        };
+        return;
+      }
+
+      // Actualizar envolventes del ciclo en curso
+      if (sig.filteredGlobal < cyc.minGlobal) cyc.minGlobal = sig.filteredGlobal;
+      if (sig.filteredGlobal > cyc.maxGlobal) cyc.maxGlobal = sig.filteredGlobal;
+      if (sig.filteredHD < cyc.minHD) cyc.minHD = sig.filteredHD;
+      if (sig.filteredHD > cyc.maxHD) cyc.maxHD = sig.filteredHD;
+      if (sig.filteredHI < cyc.minHI) cyc.minHI = sig.filteredHI;
+      if (sig.filteredHI > cyc.maxHI) cyc.maxHI = sig.filteredHI;
+      if (ABDOMEN_MODULE.filtered < cyc.minABD) cyc.minABD = ABDOMEN_MODULE.filtered;
+      if (ABDOMEN_MODULE.filtered > cyc.maxABD) cyc.maxABD = ABDOMEN_MODULE.filtered;
+
+      if (detectedPhase !== rs.currentPhase) {
+        // Al iniciar una nueva INSPIRACIÓN tras haber completado inspiración y espiración previas
+        if (detectedPhase === 'INSPIRACION' && cyc.hasInspired && cyc.hasExpired) {
+          cyc.endValleyGlobal = sig.filteredGlobal;
+          if (cyc.ti >= 0.42 && cyc.te >= 0.60) {
+            registerCompletedCycle(cyc);
+          }
+          rs.currentCycle = {
+            ti: 0, te: 0, pause: 0,
+            hasInspired: false, hasExpired: false,
+            minGlobal: sig.filteredGlobal, maxGlobal: sig.filteredGlobal, endValleyGlobal: sig.filteredGlobal,
+            minHD: sig.filteredHD, maxHD: sig.filteredHD,
+            minHI: sig.filteredHI, maxHI: sig.filteredHI,
+            minABD: ABDOMEN_MODULE.filtered, maxABD: ABDOMEN_MODULE.filtered,
+          };
+        }
+        rs.currentPhase = detectedPhase;
+        rs.phaseDuration = 0;
+      }
+
+      rs.phaseDuration += dt;
+
+      if (detectedPhase === 'INSPIRACION') {
+        rs.currentCycle.ti += dt;
+        if (rs.currentCycle.ti >= 0.38) rs.currentCycle.hasInspired = true;
+      } else if (detectedPhase === 'ESPIRACION') {
+        if (rs.currentCycle.hasInspired) {
+          rs.currentCycle.te += dt;
+          if (rs.currentCycle.te >= 0.52) rs.currentCycle.hasExpired = true;
+        }
+      } else {
+        if (rs.currentCycle.hasExpired) {
+          rs.currentCycle.pause += dt;
+        }
+      }
+    }
+
+    function registerCompletedCycle(cyc) {
+      const rs = AppState.respState;
+      if (rs.completedCycles.length >= rs.targetCycles) return;
+
+      const ti = cyc.ti;
+      const te = cyc.te;
+      const pause = cyc.pause;
+      const ratioVal = te / Math.max(ti, 0.1);
+      const total = ti + te + pause;
+
+      // Simetría Hemitorácica HD vs HI
+      const ampHD = Math.max(0.5, cyc.maxHD - cyc.minHD);
+      const ampHI = Math.max(0.5, cyc.maxHI - cyc.minHI);
+      const pctHD = (ampHD / (ampHD + ampHI)) * 100;
+      const pctHI = 100 - pctHD;
+      const asymPct = Math.abs(pctHD - pctHI);
+
+      // Predominio Tórax vs Abdomen (si módulo abdomen está activo)
+      const ampThorax = (ampHD + ampHI) * 0.5;
+      const ampABD = Math.max(0.3, cyc.maxABD - cyc.minABD);
+      const pctThorax = ABDOMEN_MODULE.enabled ? (ampThorax / (ampThorax + ampABD)) * 100 : 100;
+      const pctAbdomen = ABDOMEN_MODULE.enabled ? (100 - pctThorax) : 0;
+
+      // Evaluación de Atrapamiento Aéreo respecto al Cero Basal (x_basal = 0)
+      const tidalAmp = Math.max(2.0, cyc.maxGlobal - cyc.minGlobal);
+      const residualOffsetPct = Math.max(0, (cyc.endValleyGlobal / tidalAmp) * 100);
+      const hasAirTrapping = residualOffsetPct > 24;
+
+      let status = 'Basal Equilibrado';
+      if (asymPct > 25) status = pctHD < pctHI ? 'Hipomov. HD (>25%)' : 'Hipomov. HI (>25%)';
+      else if (ratioVal >= 2.5 || te > 3.3) status = 'Espiración Prolongada';
+      else if (hasAirTrapping) status = 'Atrapamiento Aéreo';
+      else if (ABDOMEN_MODULE.enabled && pctThorax > 68) status = 'Predominio Costal Sup.';
+      else if (asymPct >= 15) status = 'Asimetría Leve';
+      else if (ratioVal <= 1.3) status = 'Ciclo Rápido / 1:1';
+
+      rs.completedCycles.push({
+        index: rs.completedCycles.length + 1,
+        ti: Number(ti.toFixed(2)),
+        te: Number(te.toFixed(2)),
+        pause: Number(pause.toFixed(2)),
+        total: Number(total.toFixed(2)),
+        ratio: Number(ratioVal.toFixed(2)),
+        pctHD: Number(pctHD.toFixed(1)),
+        pctHI: Number(pctHI.toFixed(1)),
+        asymPct: Number(asymPct.toFixed(1)),
+        pctThorax: Number(pctThorax.toFixed(1)),
+        pctAbdomen: Number(pctAbdomen.toFixed(1)),
+        residualOffsetPct: Number(residualOffsetPct.toFixed(1)),
+        status,
+      });
+
+      updateCycleProgressUI();
+      if (rs.completedCycles.length >= 3) {
+        document.getElementById('btnFinishEarly').disabled = false;
+      }
+
+      if (rs.completedCycles.length >= rs.targetCycles) {
+        showToast('¡5 ciclos completados! Generando informe kinésico con Promedios ± DE...', 'success');
+        setTimeout(() => {
+          if (AppState.phase === 2) setPhase(3);
+        }, 850);
+      }
+    }
+
+    function updateLiveCompartmentMetrics() {
+      const sig = AppState.signal;
+      const rs = AppState.respState;
+      const buf = sig.waveformBuffer;
+
+      // 1. Hemitórax HD vs HI
+      let pctHD = 50, pctHI = 50;
+      if (rs.completedCycles.length > 0) {
+        pctHD = rs.completedCycles.reduce((s, c) => s + c.pctHD, 0) / rs.completedCycles.length;
+        pctHI = 100 - pctHD;
+      } else if (buf.length >= 20) {
+        const recent = buf.slice(-90);
+        let minD = Infinity, maxD = -Infinity, minI = Infinity, maxI = -Infinity;
+        recent.forEach((p) => {
+          if (p.xHD < minD) minD = p.xHD; if (p.xHD > maxD) maxD = p.xHD;
+          if (p.xHI < minI) minI = p.xHI; if (p.xHI > maxI) maxI = p.xHI;
+        });
+        const aD = Math.max(0.2, maxD - minD);
+        const aI = Math.max(0.2, maxI - minI);
+        pctHD = (aD / (aD + aI)) * 100;
+        pctHI = 100 - pctHD;
+      }
+      const asymPct = Math.abs(pctHD - pctHI);
+      sig.livePctHD = pctHD;
+      sig.livePctHI = pctHI;
+      sig.liveAsymPct = asymPct;
+
+      // Sincronía Bilateral HD/HI
+      if (buf.length >= 25) {
+        const recent = buf.slice(-90);
+        const n = recent.length;
+        let sumD = 0, sumI = 0;
+        recent.forEach((p) => { sumD += p.xHD; sumI += p.xHI; });
+        const mD = sumD / n, mI = sumI / n;
+        let num = 0, dD = 0, dI = 0;
+        recent.forEach((p) => {
+          const dd = p.xHD - mD, di = p.xHI - mI;
+          num += dd * di; dD += dd * dd; dI += di * di;
+        });
+        const den = Math.sqrt(dD * dI);
+        sig.liveSynchronyPct = Math.round(Math.max(0, Math.min(1, den > 0.0001 ? num / den : 1)) * 100);
+      }
+
+      document.getElementById('labelPctHD').textContent = `HD (Der): ${Math.round(pctHD)}%`;
+      document.getElementById('labelPctHI').textContent = `HI (Izq): ${Math.round(pctHI)}%`;
+      document.getElementById('labelAsymIndex').textContent = `Asim: ${asymPct.toFixed(1)}% • Sinc: ${sig.liveSynchronyPct}%`;
+      document.getElementById('barContribHD').style.width = `${Math.max(12, Math.min(88, pctHD))}%`;
+      document.getElementById('barContribHI').style.width = `${Math.max(12, Math.min(88, pctHI))}%`;
+
+      const asymBadge = document.getElementById('liveAsymBadge');
+      if (asymPct < 15) {
+        asymBadge.textContent = 'Simétrico · <15%';
+        asymBadge.className = 'text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+      } else if (asymPct <= 25) {
+        asymBadge.textContent = `Asimetría Leve ${asymPct.toFixed(0)}%`;
+        asymBadge.className = 'text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30';
+      } else {
+        asymBadge.textContent = `Hipomov. ${pctHD < pctHI ? 'HD' : 'HI'} >25%`;
+        asymBadge.className = 'text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40';
+      }
+
+      // 2. Módulo Abdomen (si está activo)
+      if (ABDOMEN_MODULE.enabled) {
+        let pT = ABDOMEN_MODULE.livePctThorax;
+        let pA = ABDOMEN_MODULE.livePctAbdomen;
+        if (rs.completedCycles.length > 0) {
+          pT = rs.completedCycles.reduce((s, c) => s + c.pctThorax, 0) / rs.completedCycles.length;
+          pA = 100 - pT;
+        }
+        document.getElementById('labelPctThorax').textContent = `Tórax: ${Math.round(pT)}%`;
+        document.getElementById('labelPctAbdomen').textContent = `Abdomen: ${Math.round(pA)}%`;
+        document.getElementById('labelThoracoAbdSync').textContent = `Sincronía Toracoabd: ${ABDOMEN_MODULE.liveSynchronyPct}%`;
+        document.getElementById('barContribThorax').style.width = `${Math.max(12, Math.min(88, pT))}%`;
+        document.getElementById('barContribAbdomen').style.width = `${Math.max(12, Math.min(88, pA))}%`;
+
+        const taBadge = document.getElementById('liveThoracoAbdBadge');
+        if (ABDOMEN_MODULE.isParadoxical) {
+          taBadge.textContent = 'Asincronía / Paradójico';
+          taBadge.className = 'text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40';
+        } else if (pT > 65) {
+          taBadge.textContent = 'Predominio Costal Sup.';
+          taBadge.className = 'text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30';
+        } else {
+          taBadge.textContent = 'Costo-Diafragmático';
+          taBadge.className = 'text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full bg-purple-500/15 text-[#C084FC] border border-purple-500/30';
+        }
+        document.getElementById('paradoxicalAlertBox').classList.toggle('hidden', !ABDOMEN_MODULE.isParadoxical);
+      }
+
+      // 3. Monitoreo de Atrapamiento Aéreo (Hiperinsuflación Dinámica) respecto a x_basal = 0
+      const trapBadge = document.getElementById('liveAirTrappingBadge');
+      if (rs.completedCycles.length > 0) {
+        const avgOffset = rs.completedCycles.reduce((s, c) => s + c.residualOffsetPct, 0) / rs.completedCycles.length;
+        sig.airTrappingOffsetPct = avgOffset;
+        sig.airTrappingDetected = avgOffset > 24;
+        if (sig.airTrappingDetected) {
+          trapBadge.textContent = `⚠ Atrapamiento (+${avgOffset.toFixed(0)}%)`;
+          trapBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40';
+        } else {
+          trapBadge.textContent = 'Cero Basal: Estable';
+          trapBadge.className = 'text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+        }
+      }
+    }
+
+    function updatePhaseCardUI(phase, durationSec) {
+      const card = document.getElementById('livePhaseCard');
+      const iconBox = document.getElementById('livePhaseIconBox');
+      const svg = document.getElementById('livePhaseSvg');
+      const title = document.getElementById('livePhaseTitle');
+      const subtitle = document.getElementById('livePhaseSubtitle');
+      const timer = document.getElementById('livePhaseTimer');
+
+      timer.textContent = `${durationSec.toFixed(1)} s`;
+
+      if (phase === 'INSPIRACION') {
+        card.className = 'sm:col-span-6 rounded-2xl p-3 border-2 border-[#06B6D4] bg-[#06B6D4]/15 flex items-center justify-between gap-2.5 transition-all duration-150 shadow-lg shadow-cyan-500/15';
+        iconBox.className = 'w-11 h-11 rounded-xl bg-[#06B6D4]/25 border border-[#22D3EE]/50 flex items-center justify-center text-[#22D3EE] shrink-0';
+        svg.setAttribute('class', 'w-6 h-6 anim-up');
+        svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />';
+        title.className = 'text-base sm:text-lg font-extrabold tracking-tight text-[#22D3EE] truncate';
+        title.textContent = 'INSPIRACIÓN';
+        subtitle.textContent = 'Tórax subiendo · Entrada de aire';
+      } else if (phase === 'ESPIRACION') {
+        card.className = 'sm:col-span-6 rounded-2xl p-3 border-2 border-[#F59E0B] bg-[#F59E0B]/15 flex items-center justify-between gap-2.5 transition-all duration-150 shadow-lg shadow-amber-500/15';
+        iconBox.className = 'w-11 h-11 rounded-xl bg-[#F59E0B]/25 border border-[#FBBF24]/50 flex items-center justify-center text-[#FBBF24] shrink-0';
+        svg.setAttribute('class', 'w-6 h-6 anim-down');
+        svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />';
+        title.className = 'text-base sm:text-lg font-extrabold tracking-tight text-[#FBBF24] truncate';
+        title.textContent = 'ESPIRACIÓN';
+        subtitle.textContent = 'Tórax bajando · Salida de aire';
+      } else {
+        card.className = 'sm:col-span-6 rounded-2xl p-3 border-2 border-[#8B5CF6]/80 bg-[#8B5CF6]/15 flex items-center justify-between gap-2.5 transition-all duration-150 shadow-lg shadow-purple-500/10';
+        iconBox.className = 'w-11 h-11 rounded-xl bg-[#8B5CF6]/25 border border-[#A78BFA]/50 flex items-center justify-center text-[#A78BFA] shrink-0';
+        svg.setAttribute('class', 'w-6 h-6');
+        svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" d="M10 9v6m4-6v6" />';
+        title.className = 'text-base sm:text-lg font-extrabold tracking-tight text-[#A78BFA] truncate';
+        title.textContent = 'PAUSA / APNEA';
+        subtitle.textContent = 'Tórax detenido · Meseta sin flujo';
+      }
+    }
+
+    function updateCycleProgressUI() {
+      const count = AppState.respState.completedCycles.length;
+      document.getElementById('cycleCountText').textContent = String(count);
+      const dots = document.getElementById('cycleDots').children;
+      for (let i = 0; i < dots.length; i++) {
+        dots[i].className = i < count
+          ? 'w-2.5 h-2.5 rounded-full bg-emerald-400 border border-emerald-300 shadow shadow-emerald-500/50 transition-all'
+          : 'w-2.5 h-2.5 rounded-full bg-slate-800 border border-slate-700 transition-all';
+      }
+    }
+
+    function updateLiveTelemetryUI() {
+      const rs = AppState.respState;
+      const cycles = rs.completedCycles;
+      let dispTi = rs.currentCycle.ti;
+      let dispTe = rs.currentCycle.te;
+      let dispPause = rs.currentCycle.pause;
+
+      if (cycles.length > 0) {
+        dispTi = cycles.reduce((s, c) => s + c.ti, 0) / cycles.length;
+        dispTe = cycles.reduce((s, c) => s + c.te, 0) / cycles.length;
+        dispPause = cycles.reduce((s, c) => s + c.pause, 0) / cycles.length;
+      }
+
+      const ratio = dispTi > 0.1 ? dispTe / dispTi : 0;
+      const totalCycle = dispTi + dispTe + dispPause;
+      const rpm = totalCycle > 0.5 ? 60 / totalCycle : 0;
+
+      document.getElementById('kpiTi').textContent = `${dispTi.toFixed(2)} s`;
+      document.getElementById('kpiTe').textContent = `${dispTe.toFixed(2)} s`;
+      document.getElementById('kpiIE').textContent = ratio > 0 ? `1 : ${ratio.toFixed(1)}` : '1 : --';
+      document.getElementById('kpiRpm').textContent = rpm > 0 ? `${rpm.toFixed(1)} RPM` : '-- RPM';
+      document.getElementById('kpiPause').textContent = `${dispPause.toFixed(1)}s`;
+
+      if (totalCycle > 0.2) {
+        const pctI = Math.max(8, Math.round((dispTi / totalCycle) * 100));
+        const pctE = Math.max(8, Math.round((dispTe / totalCycle) * 100));
+        const pctP = Math.max(4, 100 - pctI - pctE);
+
+        document.getElementById('segBarI').style.width = `${pctI}%`;
+        document.getElementById('segBarE').style.width = `${pctE}%`;
+        document.getElementById('segBarP').style.width = `${pctP}%`;
+
+        document.getElementById('liveBarLabelI').textContent = `I:${dispTi.toFixed(1)}s`;
+        document.getElementById('liveBarLabelE').textContent = `E:${dispTe.toFixed(1)}s`;
+        document.getElementById('liveBarLabelP').textContent = `P:${dispPause.toFixed(1)}s`;
+        document.getElementById('liveBarRatio').textContent = ratio > 0 ? `1 : ${ratio.toFixed(1)}` : '1 : --';
+      }
+    }
+
+    /**
+     * =======================================================================
+     * OSCILOSCOPIOS SINCRONIZADOS (95px) CON LÍNEA DE CERO BASAL CALIBRADO
+     * =======================================================================
+     */
+    function renderOscilloscopes() {
+      const buf = AppState.signal.waveformBuffer;
+      const showSplit = document.getElementById('toggleSplitWaves').checked;
+      drawDisplacementOscilloscope(DOM.dispCanvas, buf, true, showSplit);
+      drawDerivativeOscilloscope(DOM.derivCanvas, buf);
+    }
+
+    function drawDisplacementOscilloscope(canvas, buf, darkTheme = true, showSplit = true) {
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      ctx.fillStyle = darkTheme ? '#090D16' : '#F8FAFC';
+      ctx.fillRect(0, 0, W, H);
+
+      // Línea de CERO BASAL CALIBRADO (x_basal = 0) en la parte baja (78% de altura)
+      // para que toda elevación inspiratoria suba claramente por encima de ella
+      const zeroY = H * 0.78;
+      ctx.save();
+      ctx.strokeStyle = darkTheme ? 'rgba(245, 158, 11, 0.55)' : 'rgba(217, 119, 6, 0.7)';
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(0, zeroY);
+      ctx.lineTo(W, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.font = 'bold 9px "JetBrains Mono", monospace';
+      ctx.fillStyle = darkTheme ? 'rgba(251, 191, 36, 0.8)' : 'rgba(180, 83, 9, 0.9)';
+      ctx.fillText('CERO BASAL (x_basal = 0)', 8, zeroY - 4);
+      ctx.restore();
+
+      if (buf.length < 2) return;
+
+      let maxRange = 10;
+      buf.forEach((p) => {
+        maxRange = Math.max(maxRange, Math.abs(p.x), Math.abs(p.xHD || 0), Math.abs(p.xHI || 0), Math.abs(p.xABD || 0));
+      });
+      const scaleY = (H * 0.66) / maxRange;
+
+      // Curvas compartimentales punteadas: HD (#10B981), HI (#38BDF8), ABD (#C084FC)
+      if (showSplit) {
+        ctx.save();
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([3, 3]);
+
+        // HD
+        ctx.strokeStyle = '#10B981';
+        ctx.beginPath();
+        for (let i = 0; i < buf.length; i++) {
+          const px = (i / (AppState.signal.maxBufferPoints - 1)) * W;
+          const py = zeroY - (buf[i].xHD || 0) * scaleY;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // HI
+        ctx.strokeStyle = '#38BDF8';
+        ctx.beginPath();
+        for (let i = 0; i < buf.length; i++) {
+          const px = (i / (AppState.signal.maxBufferPoints - 1)) * W;
+          const py = zeroY - (buf[i].xHI || 0) * scaleY;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // Abdomen (si activo)
+        if (ABDOMEN_MODULE.enabled) {
+          ctx.strokeStyle = '#C084FC';
+          ctx.beginPath();
+          for (let i = 0; i < buf.length; i++) {
+            const px = (i / (AppState.signal.maxBufferPoints - 1)) * W;
+            const py = zeroY - (buf[i].xABD || 0) * scaleY;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Curva principal coloreada por fase
+      ctx.lineWidth = 2.3;
+      ctx.lineCap = 'round';
+      for (let i = 1; i < buf.length; i++) {
+        const p0 = buf[i - 1];
+        const p1 = buf[i];
+        const x0 = ((i - 1) / (AppState.signal.maxBufferPoints - 1)) * W;
+        const y0 = zeroY - p0.x * scaleY;
+        const x1 = (i / (AppState.signal.maxBufferPoints - 1)) * W;
+        const y1 = zeroY - p1.x * scaleY;
+
+        if (p1.phase === 'INSPIRACION') ctx.strokeStyle = '#06B6D4';
+        else if (p1.phase === 'ESPIRACION') ctx.strokeStyle = '#F59E0B';
+        else ctx.strokeStyle = '#8B5CF6';
+
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
+    }
+
+    function drawDerivativeOscilloscope(canvas, buf) {
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      ctx.fillStyle = '#090D16';
+      ctx.fillRect(0, 0, W, H);
+
+      const midY = H * 0.5;
+      ctx.strokeStyle = 'rgba(226, 232, 240, 0.4)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, midY);
+      ctx.lineTo(W, midY);
+      ctx.stroke();
+
+      if (buf.length < 2) return;
+
+      let maxAbsV = 6;
+      buf.forEach((p) => { if (Math.abs(p.v) > maxAbsV) maxAbsV = Math.abs(p.v); });
+      const scaleY = (H * 0.42) / maxAbsV;
+      const lastEps = buf[buf.length - 1].epsilon || 1.2;
+      const epsPx = Math.min(H * 0.24, lastEps * scaleY);
+
+      ctx.fillStyle = 'rgba(139, 92, 246, 0.14)';
+      ctx.fillRect(0, midY - epsPx, W, epsPx * 2);
+
+      for (let i = 1; i < buf.length; i++) {
+        const p0 = buf[i - 1];
+        const p1 = buf[i];
+        const x0 = ((i - 1) / (AppState.signal.maxBufferPoints - 1)) * W;
+        const y0 = midY - p0.v * scaleY;
+        const x1 = (i / (AppState.signal.maxBufferPoints - 1)) * W;
+        const y1 = midY - p1.v * scaleY;
+
+        ctx.beginPath();
+        ctx.moveTo(x0, midY);
+        ctx.lineTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.lineTo(x1, midY);
+        ctx.closePath();
+
+        if (p1.phase === 'INSPIRACION') {
+          ctx.fillStyle = 'rgba(6, 182, 212, 0.28)';
+          ctx.strokeStyle = '#06B6D4';
+        } else if (p1.phase === 'ESPIRACION') {
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
+          ctx.strokeStyle = '#F59E0B';
+        } else {
+          ctx.fillStyle = 'rgba(139, 92, 246, 0.22)';
+          ctx.strokeStyle = '#8B5CF6';
+        }
+        ctx.fill();
+
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
+    }
+
+    /**
+     * =======================================================================
+     * FASE 3: INFORME KINÉSICO CON PROMEDIOS ± DESVIACIÓN ESTÁNDAR (± DE) Y PDF
+     * =======================================================================
+     */
+    function calcMeanAndSD(arr) {
+      if (!arr || arr.length === 0) return { mean: 0, sd: 0 };
+      const n = arr.length;
+      const mean = arr.reduce((a, b) => a + b, 0) / n;
+      const variance = arr.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / n;
+      return { mean, sd: Math.sqrt(variance) };
+    }
+
+    function buildClinicalReport() {
+      const cycles = AppState.respState.completedCycles;
+      const tiStat = calcMeanAndSD(cycles.map((c) => c.ti));
+      const teStat = calcMeanAndSD(cycles.map((c) => c.te));
+      const pauseStat = calcMeanAndSD(cycles.map((c) => c.pause));
+      const totalStat = calcMeanAndSD(cycles.map((c) => c.total));
+      const ratioStat = calcMeanAndSD(cycles.map((c) => c.ratio));
+      const rpmStat = calcMeanAndSD(cycles.map((c) => 60 / Math.max(c.total, 0.5)));
+
+      const hdStat = calcMeanAndSD(cycles.map((c) => c.pctHD));
+      const hiStat = calcMeanAndSD(cycles.map((c) => c.pctHI));
+      const asymStat = calcMeanAndSD(cycles.map((c) => c.asymPct));
+
+      const thoraxStat = calcMeanAndSD(cycles.map((c) => c.pctThorax));
+      const abdStat = calcMeanAndSD(cycles.map((c) => c.pctAbdomen));
+      const offsetStat = calcMeanAndSD(cycles.map((c) => c.residualOffsetPct));
+
+      const regularityPct = Math.max(0, Math.min(100, Math.round((1 - (totalStat.sd / Math.max(totalStat.mean, 0.1))) * 100)));
+      const syncBilateralPct = AppState.signal.liveSynchronyPct;
+      const syncThoracoAbdPct = ABDOMEN_MODULE.liveSynchronyPct;
+      const abdomenActive = ABDOMEN_MODULE.enabled;
+      const airTrapping = offsetStat.mean > 24;
+
+      let primaryTitle = 'Patrón Ventilatorio Basal Conservado y Mecánica Compartimental Equilibrada';
+      let severity = 'ok';
+      let summaryText = `Relación I:E media de 1:${ratioStat.mean.toFixed(2)} ± ${ratioStat.sd.toFixed(2)} con retorno estable al punto cero basal calibrado y expansión hemitorácica simétrica (HD ${hdStat.mean.toFixed(1)}% vs HI ${hiStat.mean.toFixed(1)}%).`;
+
+      const temporalFindings = [];
+      const compartmentFindings = [];
+      const kinesioActions = [];
+
+      // 1. Evaluación Temporal I:E y Atrapamiento Aéreo
+      if (ratioStat.mean >= 2.5 || teStat.mean > 3.3) {
+        severity = 'alert';
+        primaryTitle = 'Fase Espiratoria Prolongada — Biomarcador de Limitación al Flujo Aéreo';
+        summaryText = `Alargamiento significativo de la espiración (Te = ${teStat.mean.toFixed(2)} ± ${teStat.sd.toFixed(2)} s) con ratio I:E de 1:${ratioStat.mean.toFixed(2)} ± ${ratioStat.sd.toFixed(2)}, compatible con resistencia aumentada al flujo aéreo espiratorio.`;
+        temporalFindings.push(`Ratio I:E desplazado a 1:${ratioStat.mean.toFixed(2)} ± ${ratioStat.sd.toFixed(2)} (basal nominal: 1:1.5 a 1:2.2).`);
+        temporalFindings.push(`Tiempo espiratorio prolongado (${teStat.mean.toFixed(2)} ± ${teStat.sd.toFixed(2)} s vs. 2.00–3.00 s nominales).`);
+        kinesioActions.push('Complementar con auscultación pulmonar y espirometría/flujometría.');
+        kinesioActions.push('Entrenar espiración con labios fruncidos para prevenir colapso dinámico bronquial.');
+      } else if (ratioStat.mean <= 1.35 || rpmStat.mean > 20.5) {
+        severity = 'warn';
+        primaryTitle = 'Patrón Ventilatorio Acelerado / Superficial (Tendencia 1:1 o Taquipnea)';
+        summaryText = `Acortamiento de la fase espiratoria (I:E 1:${ratioStat.mean.toFixed(2)} ± ${ratioStat.sd.toFixed(2)}) y/o frecuencia elevada (${rpmStat.mean.toFixed(1)} ± ${rpmStat.sd.toFixed(1)} RPM).`;
+        temporalFindings.push(`Relación I:E reducida (1:${ratioStat.mean.toFixed(2)} ± ${ratioStat.sd.toFixed(2)}) y ritmo de ${rpmStat.mean.toFixed(1)} ± ${rpmStat.sd.toFixed(1)} RPM.`);
+        kinesioActions.push('Reeducar patrón costo-diafragmático lento mediante biofeedback hacia ratio 1:2.');
+      } else {
+        temporalFindings.push(`Ratio I:E basal conservado (1:${ratioStat.mean.toFixed(2)} ± ${ratioStat.sd.toFixed(2)}) con Ti = ${tiStat.mean.toFixed(2)} ± ${tiStat.sd.toFixed(2)} s y Te = ${teStat.mean.toFixed(2)} ± ${teStat.sd.toFixed(2)} s.`);
+        temporalFindings.push(`Frecuencia en eupnea (${rpmStat.mean.toFixed(1)} ± ${rpmStat.sd.toFixed(1)} RPM) y pausas de ${pauseStat.mean.toFixed(2)} ± ${pauseStat.sd.toFixed(2)} s.`);
+      }
+
+      if (airTrapping) {
+        if (severity === 'ok') severity = 'warn';
+        temporalFindings.push(`Signo de atrapamiento aéreo dinámico (+${offsetStat.mean.toFixed(1)}% sobre cero basal en espiración máxima): los valles espiratorios no retornan completamente al punto basal.`);
+        kinesioActions.push('Favorecer vaciamiento espiratorio completo y pausas teleespiratorias relajadas.');
+      } else {
+        temporalFindings.push(`Vaciado espiratorio completo hacia el punto cero basal calibrado (desviación residual ${offsetStat.mean.toFixed(1)}% < 24%).`);
+      }
+
+      // 2. Evaluación Simetría Hemitorácica (HD vs HI)
+      if (asymStat.mean > 25) {
+        const reducedSide = hdStat.mean < hiStat.mean ? 'Hemitórax Derecho (HD)' : 'Hemitórax Izquierdo (HI)';
+        severity = 'alert';
+        primaryTitle = `Hipomovilidad Unilateral de ${reducedSide} (Asimetría ${asymStat.mean.toFixed(1)} ± ${asymStat.sd.toFixed(1)}%)`;
+        compartmentFindings.push(`Asimetría hemitorácica marcada (${asymStat.mean.toFixed(1)} ± ${asymStat.sd.toFixed(1)}%, normal < 15%) con menor expansión en ${reducedSide}.`);
+        kinesioActions.push(`Palpación costal dirigida, auscultación comparativa y ejercicios de expansión costal unilateral en ${reducedSide}.`);
+      } else if (asymStat.mean >= 15) {
+        const reducedSide = hdStat.mean < hiStat.mean ? 'Hemitórax Derecho (HD)' : 'Hemitórax Izquierdo (HI)';
+        if (severity === 'ok') severity = 'warn';
+        compartmentFindings.push(`Asimetría costal leve (${asymStat.mean.toFixed(1)} ± ${asymStat.sd.toFixed(1)}%) con discreta menor excursión en ${reducedSide}.`);
+      } else {
+        compartmentFindings.push(`Simetría hemitorácica conservada: HD ${hdStat.mean.toFixed(1)} ± ${hdStat.sd.toFixed(1)}% vs HI ${hiStat.mean.toFixed(1)} ± ${hiStat.sd.toFixed(1)}% (sincronía ${syncBilateralPct}%).`);
+      }
+
+      // 3. Evaluación Predominio Torácico vs Abdominal (si módulo abdomen estuvo activo)
+      if (abdomenActive) {
+        if (ABDOMEN_MODULE.isParadoxical) {
+          severity = 'alert';
+          compartmentFindings.push(`Asincronía / Movimiento paradójico toracoabdominal detectado (sincronía ${syncThoracoAbdPct}%).`);
+          kinesioActions.push('Evaluar fatiga diafragmática y trabajo respiratorio aumentado.');
+        } else if (thoraxStat.mean > 65) {
+          if (severity === 'ok') {
+            severity = 'warn';
+            primaryTitle = `Patrón Ventilatorio con Predominio Costal Superior (${thoraxStat.mean.toFixed(0)}% Tórax / ${abdStat.mean.toFixed(0)}% Abdomen)`;
+          }
+          compartmentFindings.push(`Predominio costal superior (${thoraxStat.mean.toFixed(1)} ± ${thoraxStat.sd.toFixed(1)}% tórax vs ${abdStat.mean.toFixed(1)} ± ${abdStat.sd.toFixed(1)}% abdomen), asociado a uso de musculatura accesoria o respiración superficial.`);
+          kinesioActions.push('Entrenar ventilación costo-diafragmática con control táctil abdominal.');
+        } else {
+          compartmentFindings.push(`Patrón costo-diafragmático equilibrado: Tórax ${thoraxStat.mean.toFixed(1)} ± ${thoraxStat.sd.toFixed(1)}% vs Abdomen ${abdStat.mean.toFixed(1)} ± ${abdStat.sd.toFixed(1)}% (sincronía ${syncThoracoAbdPct}%).`);
+        }
+      }
+
+      if (kinesioActions.length === 0) {
+        kinesioActions.push('Conservar este registro calibrado como línea base individual para seguimiento evolutivo.');
+      }
+
+      AppState.report = {
+        timestamp: new Date().toLocaleString('es-CL'),
+        cycles,
+        tiStat,
+        teStat,
+        pauseStat,
+        ratioStat,
+        rpmStat,
+        hdStat,
+        hiStat,
+        asymStat,
+        thoraxStat,
+        abdStat,
+        offsetStat,
+        regularityPct,
+        syncBilateralPct,
+        syncThoracoAbdPct,
+        abdomenActive,
+        airTrapping,
+        primaryTitle,
+        severity,
+        summaryText,
+        temporalFindings,
+        compartmentFindings,
+        kinesioActions,
+        luminance: Math.round(AppState.gatekeeper.luminance),
+        sourceLabel: AppState.mode === 'webcam' ? 'Webcam + MediaPipe Pose + Cero Basal 3s' : 'Simulación Clínica + Cero Basal 3s',
+      };
+    }
+
+    function renderPhase3Report() {
+      const rep = AppState.report;
+      if (!rep) return;
+
+      // 1. 6 Tarjetas KPI con Promedios ± DE
+      const ratioOk = rep.ratioStat.mean >= 1.45 && rep.ratioStat.mean <= 2.35;
+      const asymOk = rep.asymStat.mean < 15;
+      document.getElementById('phase3KpiGrid').innerHTML = `
+        <div class="clinical-panel rounded-xl p-3 border-l-2 ${ratioOk ? 'border-l-emerald-500' : 'border-l-amber-500'}">
+          <div class="text-[10px] font-mono text-slate-400">RATIO I:E (MEDIA ± DE)</div>
+          <div class="text-base font-bold font-mono text-white mt-0.5">1:${rep.ratioStat.mean.toFixed(2)} <span class="text-xs font-normal text-slate-400">±${rep.ratioStat.sd.toFixed(2)}</span></div>
+          <div class="text-[10px] text-slate-500">Basal: 1:1.5–1:2.2</div>
+        </div>
+        <div class="clinical-panel rounded-xl p-3 border-l-2 border-l-[#06B6D4]">
+          <div class="text-[10px] font-mono text-slate-400">INSPIRACIÓN Ti (MEDIA ± DE)</div>
+          <div class="text-base font-bold font-mono text-[#22D3EE] mt-0.5">${rep.tiStat.mean.toFixed(2)} <span class="text-xs font-normal text-slate-400">±${rep.tiStat.sd.toFixed(2)}s</span></div>
+          <div class="text-[10px] text-slate-500">Basal: 1.00–1.50 s</div>
+        </div>
+        <div class="clinical-panel rounded-xl p-3 border-l-2 border-l-[#F59E0B]">
+          <div class="text-[10px] font-mono text-slate-400">ESPIRACIÓN Te (MEDIA ± DE)</div>
+          <div class="text-base font-bold font-mono text-[#FBBF24] mt-0.5">${rep.teStat.mean.toFixed(2)} <span class="text-xs font-normal text-slate-400">±${rep.teStat.sd.toFixed(2)}s</span></div>
+          <div class="text-[10px] text-slate-500">Basal: 2.00–3.00 s</div>
+        </div>
+        <div class="clinical-panel rounded-xl p-3 border-l-2 border-l-slate-400">
+          <div class="text-[10px] font-mono text-slate-400">RITMO / REGULARIDAD</div>
+          <div class="text-base font-bold font-mono text-white mt-0.5">${rep.rpmStat.mean.toFixed(1)} <span class="text-xs font-normal text-slate-400">±${rep.rpmStat.sd.toFixed(1)}</span></div>
+          <div class="text-[10px] text-emerald-400 font-mono">Reg: ${rep.regularityPct}% • P:${rep.pauseStat.mean.toFixed(1)}s</div>
+        </div>
+        <div class="clinical-panel rounded-xl p-3 border-l-2 ${asymOk ? 'border-l-[#10B981]' : 'border-l-rose-500'}">
+          <div class="text-[10px] font-mono text-slate-400">SIMETRÍA HD / HI</div>
+          <div class="text-sm font-bold font-mono text-white mt-0.5">${rep.hdStat.mean.toFixed(0)}% / ${rep.hiStat.mean.toFixed(0)}%</div>
+          <div class="text-[10px] font-mono ${asymOk ? 'text-emerald-400' : 'text-rose-400'}">Asim: ${rep.asymStat.mean.toFixed(1)}±${rep.asymStat.sd.toFixed(1)}%</div>
+        </div>
+        <div class="clinical-panel rounded-xl p-3 border-l-2 border-l-[#C084FC]">
+          <div class="text-[10px] font-mono text-slate-400">TÓRAX / ABDOMEN</div>
+          <div class="text-sm font-bold font-mono text-white mt-0.5">${rep.abdomenActive ? `${rep.thoraxStat.mean.toFixed(0)}% / ${rep.abdStat.mean.toFixed(0)}%` : 'Solo Tórax'}</div>
+          <div class="text-[10px] font-mono text-[#C084FC]">${rep.abdomenActive ? `Sinc: ${rep.syncThoracoAbdPct}%` : 'Módulo OFF'}</div>
+        </div>
+      `;
+
+      // 2. Banner Principal
+      const banner = document.getElementById('diagnosticBanner');
+      const styles = {
+        ok: 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200',
+        warn: 'bg-amber-500/10 border-amber-500/40 text-amber-200',
+        alert: 'bg-rose-500/10 border-rose-500/40 text-rose-200',
+      };
+      const tags = {
+        ok: 'HALLAZGO BASAL CONSERVADO',
+        warn: 'ALTERACIÓN FUNCIONAL LEVE / MODERADA',
+        alert: 'HALLAZGO BIOMECÁNICO SIGNIFICATIVO',
+      };
+      banner.className = `rounded-2xl p-4 border space-y-1 ${styles[rep.severity]}`;
+      banner.innerHTML = `
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-950/60">${tags[rep.severity]}</span>
+          <span class="text-xs font-mono opacity-80">${rep.timestamp} • ${rep.cycles.length} ciclos (Media ± DE)</span>
+        </div>
+        <h3 class="text-sm sm:text-base font-bold text-white">${rep.primaryTitle}</h3>
+        <p class="text-xs text-slate-200 leading-relaxed">${rep.summaryText}</p>
+      `;
+
+      // 3. Barras Compartimentales
+      document.getElementById('summaryPctHD').textContent = `HD (Der): ${rep.hdStat.mean.toFixed(1)} ± ${rep.hdStat.sd.toFixed(1)}%`;
+      document.getElementById('summaryPctHI').textContent = `HI (Izq): ${rep.hiStat.mean.toFixed(1)} ± ${rep.hiStat.sd.toFixed(1)}%`;
+      document.getElementById('summaryBarHD').style.width = `${Math.max(12, Math.min(88, rep.hdStat.mean))}%`;
+      document.getElementById('summaryBarHI').style.width = `${Math.max(12, Math.min(88, rep.hiStat.mean))}%`;
+      document.getElementById('summaryAsymVal').textContent = `Asimetría Bilateral: ${rep.asymStat.mean.toFixed(1)} ± ${rep.asymStat.sd.toFixed(1)}% (Normal < 15%)`;
+      document.getElementById('summarySyncVal').textContent = `Sincronía Bilateral: ${rep.syncBilateralPct}%`;
+
+      const abdBox = document.getElementById('summaryAbdomenBox');
+      abdBox.classList.toggle('hidden', !rep.abdomenActive);
+      if (rep.abdomenActive) {
+        document.getElementById('summaryPctThorax').textContent = `Tórax Sup.: ${rep.thoraxStat.mean.toFixed(1)} ± ${rep.thoraxStat.sd.toFixed(1)}%`;
+        document.getElementById('summaryPctAbdomen').textContent = `Abdomen: ${rep.abdStat.mean.toFixed(1)} ± ${rep.abdStat.sd.toFixed(1)}%`;
+        document.getElementById('summaryBarThorax').style.width = `${Math.max(12, Math.min(88, rep.thoraxStat.mean))}%`;
+        document.getElementById('summaryBarAbdomen').style.width = `${Math.max(12, Math.min(88, rep.abdStat.mean))}%`;
+        document.getElementById('summaryPredominanceLabel').textContent = rep.thoraxStat.mean > 65 ? 'Patrón: Predominio Costal Superior' : 'Patrón: Costo-Diafragmático';
+        document.getElementById('summaryThoracoAbdSync').textContent = `Sincronía Toracoabd: ${rep.syncThoracoAbdPct}%`;
+      }
+
+      // 4. Hallazgos Kinésicos
+      document.getElementById('clinicalFindingsContainer').innerHTML = `
+        <div class="p-3 rounded-xl bg-cyan-500/5 border border-cyan-500/25 space-y-1">
+          <div class="text-[10px] font-mono font-bold text-[#22D3EE] uppercase">1. Cinemática Temporal y Cero Basal</div>
+          <ul class="list-disc list-inside text-xs text-slate-300 space-y-0.5">
+            ${rep.temporalFindings.map((f) => `<li>${f}</li>`).join('')}
+          </ul>
+        </div>
+        <div class="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/25 space-y-1">
+          <div class="text-[10px] font-mono font-bold text-[#10B981] uppercase">2. Simetría Hemitorácica y Patrón Toracoabdominal</div>
+          <ul class="list-disc list-inside text-xs text-slate-300 space-y-0.5">
+            ${rep.compartmentFindings.map((f) => `<li>${f}</li>`).join('')}
+          </ul>
+        </div>
+        <div class="p-3 rounded-xl bg-amber-500/5 border border-amber-500/25 space-y-1">
+          <div class="text-[10px] font-mono font-bold text-[#FBBF24] uppercase">3. Sugerencias de Abordaje Kinésico</div>
+          <ul class="list-disc list-inside text-xs text-slate-300 space-y-0.5">
+            ${rep.kinesioActions.map((a) => `<li>${a}</li>`).join('')}
+          </ul>
+        </div>
+      `;
+
+      // 5. Tabla Ciclo por Ciclo
+      document.getElementById('thAbdCol').classList.toggle('hidden', !rep.abdomenActive);
+      document.getElementById('cyclesTableBody').innerHTML = rep.cycles.map((c) => `
+        <tr>
+          <td class="py-2 pr-2 font-bold text-slate-200">#${c.index}</td>
+          <td class="py-2 px-2 text-[#22D3EE]">${c.ti.toFixed(2)} s</td>
+          <td class="py-2 px-2 text-[#FBBF24]">${c.te.toFixed(2)} s</td>
+          <td class="py-2 px-2 text-[#A78BFA]">${c.pause.toFixed(2)} s</td>
+          <td class="py-2 px-2 font-bold text-white">1:${c.ratio.toFixed(2)}</td>
+          <td class="py-2 px-2 text-[#10B981]">${c.pctHD.toFixed(1)}%</td>
+          <td class="py-2 px-2 text-[#38BDF8]">${c.pctHI.toFixed(1)}%</td>
+          <td class="py-2 px-2 ${c.asymPct > 25 ? 'text-rose-400 font-bold' : 'text-slate-300'}">${c.asymPct.toFixed(1)}%</td>
+          <td class="py-2 px-2 text-[#C084FC] ${rep.abdomenActive ? '' : 'hidden'}">${c.pctAbdomen.toFixed(1)}%</td>
+          <td class="py-2 pl-2 text-right text-slate-300">${c.status}</td>
+        </tr>
+      `).join('');
+
+      resizeCanvases();
+      drawDisplacementOscilloscope(DOM.summaryCanvas, AppState.signal.waveformBuffer, true, true);
+    }
+
+    /**
+     * Genera y descarga "Informe_Biomecanico_PneumoVision.pdf"
+     */
+    function exportReportToPDF() {
+      const rep = AppState.report;
+      if (!rep) return;
+
+      if (!window.jspdf || !window.jspdf.jsPDF) {
+        showToast('No se pudo cargar jsPDF.', 'error');
+        return;
+      }
+
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+      const patientName = document.getElementById('inputPatientName').value.trim() || 'No especificado';
+      const patientAge = document.getElementById('inputPatientAge').value.trim() ? `${document.getElementById('inputPatientAge').value.trim()} años` : 'No especificada';
+      const borgScale = document.getElementById('inputBorgScale').value;
+      const spo2Val = document.getElementById('inputSpo2').value.trim() || '98';
+      const kinesioNotes = document.getElementById('inputKinesioNotes').value.trim() || 'Sin observaciones adicionales registradas.';
+
+      // Encabezado
+      doc.setFillColor(11, 15, 25);
+      doc.rect(0, 0, 210, 26, 'F');
+      doc.setTextColor(6, 182, 212);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13.5);
+      doc.text('PNEUMOVISION PRO — EVALUACIÓN BIOMECÁNICA RESPIRATORIA', 14, 11.5);
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8.8);
+      doc.text('RELACIÓN I:E, SIMETRÍA HEMITORÁCICA Y PATRÓN TORACOABDOMINAL (MEDIA ± DE)', 14, 17.5);
+
+      doc.setTextColor(148, 163, 184);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.6);
+      doc.text(`Fecha: ${rep.timestamp}  |  Sensor: ${rep.sourceLabel}  |  Luz Rec.709: ${rep.luminance}/255`, 14, 23);
+
+      // Ficha del Paciente
+      let y = 30;
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(203, 213, 225);
+      doc.roundedRect(14, y, 182, 22, 2, 2, 'FD');
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.6);
+      doc.text(`Paciente / ID: ${patientName}`, 18, y + 5.5);
+      doc.text(`Edad: ${patientAge}`, 115, y + 5.5);
+      doc.text(`SpO2 Basal: ${spo2Val}%`, 155, y + 5.5);
+      doc.text(`Escala Borg Modificada: ${borgScale}`, 18, y + 11);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.8);
+      doc.setTextColor(71, 85, 105);
+      doc.text(doc.splitTextToSize(`Observaciones Kinésicas: ${kinesioNotes}`, 174), 18, y + 16.5);
+
+      // Banner Resultado Global
+      y += 26;
+      if (rep.severity === 'ok') {
+        doc.setFillColor(236, 253, 245); doc.setDrawColor(16, 185, 129); doc.setTextColor(6, 95, 70);
+      } else if (rep.severity === 'alert') {
+        doc.setFillColor(254, 242, 242); doc.setDrawColor(225, 29, 72); doc.setTextColor(159, 18, 57);
+      } else {
+        doc.setFillColor(255, 251, 235); doc.setDrawColor(245, 158, 11); doc.setTextColor(146, 64, 14);
+      }
+      doc.roundedRect(14, y, 182, 20, 2, 2, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text(rep.primaryTitle, 18, y + 5.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.6);
+      doc.setTextColor(30, 41, 59);
+      doc.text(doc.splitTextToSize(rep.summaryText, 174), 18, y + 10.5);
+
+      // Sección 1: Promedios ± DE y Balance Compartimental
+      y += 24;
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.2);
+      doc.text('1. Métricas Biomecánicas (Promedios ± Desviación Estándar de 5 Ciclos)', 14, y);
+      y += 2.8;
+
+      doc.setFillColor(241, 245, 249);
+      doc.roundedRect(14, y, 182, 13.5, 1.5, 1.5, 'F');
+      doc.setFontSize(8);
+      doc.setTextColor(15, 23, 42);
+      doc.text(`I:E: 1:${rep.ratioStat.mean.toFixed(2)} ± ${rep.ratioStat.sd.toFixed(2)}`, 17, y + 5.2);
+      doc.text(`Ti: ${rep.tiStat.mean.toFixed(2)} ± ${rep.tiStat.sd.toFixed(2)}s`, 60, y + 5.2);
+      doc.text(`Te: ${rep.teStat.mean.toFixed(2)} ± ${rep.teStat.sd.toFixed(2)}s`, 98, y + 5.2);
+      doc.text(`Ritmo: ${rep.rpmStat.mean.toFixed(1)} ± ${rep.rpmStat.sd.toFixed(1)} RPM`, 136, y + 5.2);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.3);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Basal: 1:1.5–1:2.2`, 17, y + 10.4);
+      doc.text(`Basal: 1.0–1.5s`, 60, y + 10.4);
+      doc.text(`Basal: 2.0–3.0s`, 98, y + 10.4);
+      doc.text(`Regularidad: ${rep.regularityPct}% | Pausa: ${rep.pauseStat.mean.toFixed(2)}s`, 136, y + 10.4);
+      y += 16.5;
+
+      // Balance HD vs HI y Tórax vs Abdomen
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.8);
+      doc.setTextColor(5, 150, 105);
+      doc.text(`HD (Der): ${rep.hdStat.mean.toFixed(1)} ± ${rep.hdStat.sd.toFixed(1)}%  |  HI (Izq): ${rep.hiStat.mean.toFixed(1)} ± ${rep.hiStat.sd.toFixed(1)}%  |  Asimetría: ${rep.asymStat.mean.toFixed(1)} ± ${rep.asymStat.sd.toFixed(1)}%`, 14, y + 3.5);
+      if (rep.abdomenActive) {
+        doc.setTextColor(126, 34, 206);
+        doc.text(`Tórax: ${rep.thoraxStat.mean.toFixed(1)} ± ${rep.thoraxStat.sd.toFixed(1)}%  |  Abdomen: ${rep.abdStat.mean.toFixed(1)} ± ${rep.abdStat.sd.toFixed(1)}%  |  Sincronía: ${rep.syncThoracoAbdPct}%`, 14, y + 8);
+        y += 11.5;
+      } else {
+        y += 7;
+      }
+
+      // Sección 2: Gráfica Capturada
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.2);
+      doc.text('2. Registro Cinemático Respecto al Punto Cero Basal Calibrado (x_basal = 0)', 14, y);
+      y += 2.2;
+      const pdfChart = document.createElement('canvas');
+      pdfChart.width = 1200;
+      pdfChart.height = 240;
+      drawDisplacementOscilloscope(pdfChart, AppState.signal.waveformBuffer, false, true);
+      doc.addImage(pdfChart.toDataURL('image/png'), 'PNG', 14, y, 182, 32);
+      y += 36;
+
+      // Sección 3: Tabla Ciclo por Ciclo
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.2);
+      doc.text(`3. Desglose Ciclo por Ciclo (${rep.cycles.length} Ciclos)`, 14, y);
+      y += 2.2;
+
+      doc.setFillColor(226, 232, 240);
+      doc.rect(14, y, 182, 5.2, 'F');
+      doc.setFontSize(7.4);
+      doc.text('Ciclo', 16, y + 3.6);
+      doc.text('Ti (s)', 30, y + 3.6);
+      doc.text('Te (s)', 46, y + 3.6);
+      doc.text('Pausa', 62, y + 3.6);
+      doc.text('Ratio I:E', 78, y + 3.6);
+      doc.text('% HD', 100, y + 3.6);
+      doc.text('% HI', 116, y + 3.6);
+      doc.text('Asim.', 132, y + 3.6);
+      if (rep.abdomenActive) doc.text('% ABD', 147, y + 3.6);
+      doc.text('Patrón', 165, y + 3.6);
+      y += 5.2;
+
+      doc.setFont('helvetica', 'normal');
+      rep.cycles.forEach((c, idx) => {
+        if (idx % 2 === 1) { doc.setFillColor(248, 250, 252); doc.rect(14, y, 182, 5, 'F'); }
+        doc.setTextColor(30, 41, 59);
+        doc.text(`#${c.index}`, 16, y + 3.5);
+        doc.text(`${c.ti.toFixed(2)}`, 30, y + 3.5);
+        doc.text(`${c.te.toFixed(2)}`, 46, y + 3.5);
+        doc.text(`${c.pause.toFixed(2)}`, 62, y + 3.5);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`1:${c.ratio.toFixed(2)}`, 78, y + 3.5);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${c.pctHD.toFixed(1)}%`, 100, y + 3.5);
+        doc.text(`${c.pctHI.toFixed(1)}%`, 116, y + 3.5);
+        doc.text(`${c.asymPct.toFixed(1)}%`, 132, y + 3.5);
+        if (rep.abdomenActive) doc.text(`${c.pctAbdomen.toFixed(1)}%`, 147, y + 3.5);
+        doc.text(c.status, 165, y + 3.5);
+        y += 5;
+      });
+
+      // Sección 4: Interpretación Kinésica Funcional
+      y += 4.5;
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.2);
+      doc.text('4. Interpretación Biomecánica Descriptiva y Sugerencias Kinésicas', 14, y);
+      y += 4;
+
+      doc.setFontSize(7.6);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(30, 41, 59);
+      const bullets = [
+        ...rep.temporalFindings.map((t) => `[Temporal] ${t}`),
+        ...rep.compartmentFindings.map((c) => `[Compartimental] ${c}`),
+        ...rep.kinesioActions.map((k) => `[Abordaje] ${k}`),
+      ];
+      bullets.forEach((b) => {
+        if (y > 274) return;
+        const lines = doc.splitTextToSize(`• ${b}`, 180);
+        doc.text(lines, 15, y);
+        y += lines.length * 3.5;
+      });
+
+      // Nota Legal Kinésica
+      doc.setDrawColor(203, 213, 225);
+      doc.line(14, 281, 196, 281);
+      doc.setFontSize(6.8);
+      doc.setTextColor(100, 116, 139);
+      doc.text(
+        'Nota Legal Kinésica: PneumoVision Pro cuantifica la cinemática externa de la pared toracoabdominal mediante visión artificial sin contacto. Herramienta de evaluación funcional kinésica y biofeedback; no sustituye espirometría ni diagnóstico médico.',
+        14,
+        285.5
+      );
+
+      doc.save('Informe_Biomecanico_PneumoVision.pdf');
+      showToast('Informe PDF ("Informe_Biomecanico_PneumoVision.pdf") descargado.', 'success');
+    }
+
+    /**
+     * =======================================================================
+     * EVENTOS E INICIALIZACIÓN AL CARGAR EL DOM
+     * =======================================================================
+     */
+    window.addEventListener('DOMContentLoaded', () => {
+      initAllGrids();
+      initMediaPipePose();
+      setAbdomenModuleEnabled(true);
+      resizeCanvases();
+
+      // Interruptores Modulares de Abdomen (Header y Fase 1 sincronizados)
+      document.getElementById('headerAbdomenToggle').addEventListener('click', () => {
+        setAbdomenModuleEnabled(!ABDOMEN_MODULE.enabled);
+        showToast(
+          ABDOMEN_MODULE.enabled
+            ? 'Módulo Abdomen ACTIVADO (16 nodos violeta en zona abdominal).'
+            : 'Módulo Abdomen DESACTIVADO (evaluación centrada exclusivamente en Hemitórax Derecho e Izquierdo).',
+          'info'
+        );
+      });
+
+      document.getElementById('phase1AbdomenCheckbox').addEventListener('change', (e) => {
+        setAbdomenModuleEnabled(e.target.checked);
+      });
+
+      // Activación de cámara o demo
+      document.getElementById('btnActivateCamera').addEventListener('click', startWebcam);
+      document.getElementById('btnActivateDemo').addEventListener('click', startDemoMode);
+      document.getElementById('btnQuickDemo').addEventListener('click', () => {
+        if (AppState.mode !== 'demo') startDemoMode();
+        if (AppState.phase === 2) startBasal3sCalibration();
+      });
+
+      document.getElementById('globalDemoPresetSelect').addEventListener('change', () => {
+        if (AppState.mode !== 'demo') startDemoMode();
+        if (AppState.phase === 2) startBasal3sCalibration();
+      });
+
+      // Inicio hacia Fase 2A (Calibración Basal 3s)
+      DOM.btnStartPhase2.addEventListener('click', () => {
+        if (!DOM.btnStartPhase2.disabled) setPhase(2);
+      });
+
+      DOM.btnForceStartPhase2.addEventListener('click', () => {
+        if (AppState.mode !== 'idle') {
+          showToast('Inicio manual forzado. Realiza la espiración máxima durante los 3 segundos de calibración.', 'info');
+          setPhase(2);
+        }
+      });
+
+      // Recalibrar Cero Basal (3s) en cualquier momento durante Fase 2
+      document.getElementById('btnRecalibrateZero').addEventListener('click', () => {
+        startBasal3sCalibration();
+      });
+
+      // Sensibilidad AGC
+      const sensMultipliers = { low: 0.65, normal: 1.0, high: 1.65 };
+      document.querySelectorAll('.sens-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const level = btn.getAttribute('data-sens');
+          AppState.signal.sensitivityLevel = level;
+          AppState.signal.userMultiplier = sensMultipliers[level] || 1.0;
+          document.querySelectorAll('.sens-btn').forEach((b) => {
+            b.className = 'sens-btn px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-400 hover:text-white transition';
+          });
+          btn.className = 'sens-btn px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-cyan-500 text-slate-950 transition';
+        });
+      });
+
+      document.getElementById('btnResetCapture').addEventListener('click', () => {
+        startBasal3sCalibration();
+      });
+
+      document.getElementById('btnFinishEarly').addEventListener('click', () => {
+        if (AppState.respState.completedCycles.length >= 3) setPhase(3);
+      });
+
+      document.getElementById('btnNewEvaluation').addEventListener('click', () => setPhase(2));
+      document.getElementById('btnDownloadPdf').addEventListener('click', exportReportToPDF);
+
+      window.addEventListener('resize', resizeCanvases);
+    });
+  </script>
+</body>
+</html>
